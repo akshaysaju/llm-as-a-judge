@@ -120,8 +120,10 @@ class Judge:
             "complaint": case["complaint"],
             "summary":   case["scribe_summary"],
         }))
-        scribe_score = round((float(s.get("accuracy", 0)) + float(s.get("completeness", 0))) / 2, 2)
-        scribe_note  = s.get("note", "")
+        scribe_accuracy    = round(float(s.get("accuracy", 0)), 2)
+        scribe_completeness= round(float(s.get("completeness", 0)), 2)
+        scribe_score       = round((scribe_accuracy + scribe_completeness) / 2, 2)
+        scribe_note        = s.get("note", "")
 
         # Grade TRACE classification
         t = self._parse(self.trace_chain.invoke({
@@ -137,8 +139,10 @@ class Judge:
             "complaint":  case["complaint"],
             "resolution": case["agent_resolution"],
         }))
-        resolution_score = round((float(r.get("addressed", 0)) + float(r.get("quality", 0))) / 2, 2)
-        resolution_note  = r.get("note", "")
+        resolution_addressed = round(float(r.get("addressed", 0)), 2)
+        resolution_quality   = round(float(r.get("quality", 0)), 2)
+        resolution_score     = round((resolution_addressed + resolution_quality) / 2, 2)
+        resolution_note      = r.get("note", "")
 
         # Routing verdict
         scores  = [scribe_score, trace_score, resolution_score]
@@ -146,10 +150,19 @@ class Judge:
         verdict = self._verdict(scores)
 
         return {
-            "id":      case["id"],
+            "id": case["id"],
+            # Individual sub-scores per dimension
+            "individual_scores": {
+                "scribe_accuracy":        scribe_accuracy,
+                "scribe_completeness":    scribe_completeness,
+                "trace_classification":   trace_score,
+                "resolution_addressed":   resolution_addressed,
+                "resolution_quality":     resolution_quality,
+            },
+            # Aggregated scores (average of sub-scores per component)
             "scores": {
-                "scribe_summary": scribe_score,
-                "trace_category": trace_score,
+                "scribe_summary":   scribe_score,
+                "trace_category":   trace_score,
                 "agent_resolution": resolution_score,
             },
             "notes": {

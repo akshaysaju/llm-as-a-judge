@@ -44,10 +44,17 @@ for case in CASES:
     console.print(f"  Complaint : {case['complaint'][:90]}...")
     console.print(f"  Summary   : {case['scribe_summary'][:90]}...")
     console.print(f"  Category  : {case['trace_category']}")
-    s = result["scores"]
-    console.print(f"  Scores    → SCRIBE:{fmt(s['scribe_summary'])}  "
+    s  = result["scores"]
+    i  = result["individual_scores"]
+    console.print(f"  Scores (aggregated) → SCRIBE:{fmt(s['scribe_summary'])}  "
                   f"TRACE:{fmt(s['trace_category'])}  "
                   f"RESOLUTION:{fmt(s['agent_resolution'])}")
+    console.print(f"  Scores (individual) →"
+                  f"  accuracy:{fmt(i['scribe_accuracy'])}"
+                  f"  completeness:{fmt(i['scribe_completeness'])}"
+                  f"  classification:{fmt(i['trace_classification'])}"
+                  f"  addressed:{fmt(i['resolution_addressed'])}"
+                  f"  quality:{fmt(i['resolution_quality'])}")
     for component, note in result["notes"].items():
         if note:
             console.print(f"  [{component}] {note}")
@@ -55,19 +62,26 @@ for case in CASES:
 
 # ── Summary table ─────────────────────────────────────────────────────────────
 
-table = Table(title="Manual Review Queue — Judge Verdicts", box=box.SIMPLE_HEAVY)
-table.add_column("Case");       table.add_column("SCRIBE", justify="right")
-table.add_column("TRACE",  justify="right"); table.add_column("Resolution", justify="right")
-table.add_column("Avg",    justify="right"); table.add_column("Verdict")
+table = Table(title="Manual Review Queue — Judge Verdicts (Individual Scores)", box=box.SIMPLE_HEAVY)
+table.add_column("Case")
+table.add_column("Accuracy",      justify="right")
+table.add_column("Completeness",  justify="right")
+table.add_column("Classification",justify="right")
+table.add_column("Addressed",     justify="right")
+table.add_column("Quality",       justify="right")
+table.add_column("Avg",           justify="right")
+table.add_column("Verdict")
 
 for r in results:
-    s  = r["scores"]
+    i  = r["individual_scores"]
     vc = STYLE[r["verdict"]]
     table.add_row(
         r["id"],
-        fmt(s["scribe_summary"]),
-        fmt(s["trace_category"]),
-        fmt(s["agent_resolution"]),
+        fmt(i["scribe_accuracy"]),
+        fmt(i["scribe_completeness"]),
+        fmt(i["trace_classification"]),
+        fmt(i["resolution_addressed"]),
+        fmt(i["resolution_quality"]),
         fmt(r["avg"]),
         f"[{vc}]{r['verdict']}[/{vc}]",
     )
