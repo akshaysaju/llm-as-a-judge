@@ -94,6 +94,44 @@ python3 test_consistency.py
 
 ---
 
+## Scoring Details
+
+The system calculates scores using a combination of LLM evaluation, normalisation, and deterministic logic:
+
+1. **Raw LLM Scoring (1 to 5):** The LLM evaluates the complaint and summary against specific rubrics via Chain-of-Thought, assigning an integer score. A `1` represents failure (e.g., hallucinated facts), while a `5` represents perfect execution.
+2. **Normalisation (0.0 to 1.0):** The `1-5` integer is mathematically divided by 5 to create a strict percentage score (e.g., an LLM score of 3 becomes `0.60`).
+3. **SCRIBE Average:** The final SCRIBE score is an average of 7 distinct LLM dimensions (Faithfulness, Coverage, Action-Orientedness, Conciseness, Clarity, Urgency Tone, Entity Preservation). 
+4. **Deterministic Metrics:** The script independently assesses the summaries using pure Python:
+   - *Compression Ratio:* `len(summary) / len(complaint)`. Summaries manually checked against a strict `0.10 - 0.40` acceptable range. 
+   - *Entity Recall:* Uses Regex to strictly check what percentage of extracted entities (e.g., `$35`, `March 28th`) survived the summarisation.
+
+### Prompt Example
+The judge asks the LLM to provide step-by-step reasoning *before* scoring to prevent score drift.
+
+**Example: Faithfulness Prompt**
+```text
+You are evaluating a complaint summary for faithfulness.
+
+Step 1 — List every factual claim in the summary.
+Step 2 — For each claim, check if it is present in the original complaint.
+Step 3 — Score using this rubric:
+  1 = Summary contains facts not present in the complaint (hallucination)
+  2 = Summary has significant paraphrasing that distorts meaning
+  3 = Summary is mostly faithful, minor wording differences only
+  4 = All claims traceable but one small detail is off
+  5 = Every claim in the summary can be traced directly to the complaint
+
+Original Complaint:
+{complaint}
+
+SCRIBE Summary:
+{summary}
+
+Reply with JSON only. Example: {{"reasoning": "your step-by-step analysis", "score": 4}}
+```
+
+---
+
 ## Example Output
 
 ```
