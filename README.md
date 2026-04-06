@@ -149,20 +149,21 @@ Reply with JSON only. Example: {{"reasoning": "your step-by-step analysis", "sco
 
 ## Example Output
 
-```
-── COMP-001 ──
-Verdict: PASS
-...
-  SCRIBE scores (avg: 0.77)
-  TRACE score: 1.00
+```text
+  Case       Faith   Cover   Action   Concise   Clarity   Urgency   Entity   TRACE   Ratio           Verdict       
+ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 
+  COMP-001    0.60    0.60     1.00      0.60      1.00      0.60     1.00    1.00   0.6 too_long    PASS          
+  COMP-002    0.60    0.60     1.00      0.60      1.00      0.60     1.00    1.00   0.64 too_long   PASS          
+  COMP-003    0.80    0.40     0.80      0.20      0.60      0.60     0.40    1.00   0.26 ok         NEEDS_REVIEW  
+  COMP-004    0.80    0.40     1.00      0.60      1.00      0.60     1.00    0.00   0.6 too_long    FAIL          
+  COMP-005    0.60    0.40     1.00      0.60      1.00      0.80     1.00    1.00   0.93 too_long   PASS          
 
-── COMP-003 ──
-Verdict: NEEDS_REVIEW
-...
-  SCRIBE scores (avg: 0.54)
-  TRACE score: 1.00
+Routing
+  PASS         3/5 — auto-approved
+  NEEDS_REVIEW 1/5 — human queue
+  FAIL         1/5 — escalated
 
-Manual review workload reduced by 60% (3 of 5 cases handled by LLM Judge)
+  Workload reduced by 60%
 ```
 
 ---
