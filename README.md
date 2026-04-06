@@ -100,10 +100,25 @@ The system calculates scores using a combination of LLM evaluation, normalisatio
 
 1. **Raw LLM Scoring (1 to 5):** The LLM evaluates the complaint and summary against specific rubrics via Chain-of-Thought, assigning an integer score. A `1` represents failure (e.g., hallucinated facts), while a `5` represents perfect execution.
 2. **Normalisation (0.0 to 1.0):** The `1-5` integer is mathematically divided by 5 to create a strict percentage score (e.g., an LLM score of 3 becomes `0.60`).
-3. **SCRIBE Average:** The final SCRIBE score is an average of 7 distinct LLM dimensions (Faithfulness, Coverage, Action-Orientedness, Conciseness, Clarity, Urgency Tone, Entity Preservation). 
+3. **SCRIBE Average:** The final SCRIBE score is an average of 7 distinct LLM dimensions. 
 4. **Deterministic Metrics:** The script independently assesses the summaries using pure Python:
    - *Compression Ratio:* `len(summary) / len(complaint)`. Summaries manually checked against a strict `0.10 - 0.40` acceptable range. 
    - *Entity Recall:* Uses Regex to strictly check what percentage of extracted entities (e.g., `$35`, `March 28th`) survived the summarisation.
+
+### Metric Definitions (What and Why)
+The Judge evaluates the upstream systems across these specific dimensions:
+
+#### SCRIBE Metrics (Summarisation Quality)
+*   **Faithfulness:** *Did the summary make things up?* Important to ensure the AI did not hallucinate completely new facts not present in the original complaint.
+*   **Coverage:** *Did it miss the main point?* Verifies the summary successfully captured the core problem, the impact on the customer, and the customer's actual ask.
+*   **Action-Orientedness:** *Can an agent act on this?* A support agent should be able to instantly read the summary and know the exact next step without digging into the original complaint.
+*   **Conciseness:** *Is it bloated?* The goal of SCRIBE is compression. If it's too vague or too long, it fails its purpose.
+*   **Clarity:** *Is it an easy read?* Ensures the grammar and structure can be comprehended by a human agent in under 5 seconds.
+*   **Urgency Tone:** *Is the customer screaming?* If the original text is highly severe or angry, the summary must retain that tone so human queues can prioritise the ticket appropriately.
+*   **Entity Preservation:** *Did we lose the data?* Crucial check to ensure IDs, dates (e.g., `March 28th`), and monetary amounts (e.g., `$4,200`) weren't stripped out by the summariser.
+
+#### TRACE Metrics (Classification Quality)
+*   **Classification:** *Did it go to the right department?* Ensures the ticket was correctly assigned to a category (e.g., *Fraud* vs *Billing Dispute*). If misclassified, it creates immense friction in the support pipeline.
 
 ### Prompt Example
 The judge asks the LLM to provide step-by-step reasoning *before* scoring to prevent score drift.
