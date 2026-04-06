@@ -36,18 +36,17 @@ Complaint Case (already processed by SCRIBE + TRACE + Agent)
         │
         ▼
    ┌──────────┐
-   │  JUDGE   │  reads: raw complaint + SCRIBE summary + TRACE category + agent resolution
+   │  JUDGE   │  reads: raw complaint + SCRIBE summary + TRACE category
    │ (mistral)│
    └────┬─────┘
-        │  grades 3 things independently
-        ├── SCRIBE Grade      → is the summary accurate and complete?
-        ├── TRACE Grade       → is the complaint category correct?
-        └── Resolution Grade  → did the agent actually resolve the issue?
+        │  grades 2 things independently
+        ├── SCRIBE Grade      → is the summary accurate, faithful, and action-oriented?
+        └── TRACE Grade       → is the complaint category correct?
                 │
         ┌───────┴────────┐
         │  Routing Logic  │
-        │  all ≥ 0.75    →  PASS
-        │  any  < 0.50   →  FAIL
+        │  min ≥ 0.75    →  PASS
+        │  min < 0.50    →  FAIL
         │  otherwise     →  NEEDS_REVIEW
         └────────────────┘
 ```
@@ -62,8 +61,8 @@ SCRIBE and TRACE use `llama3.2`. The Judge uses `mistral` — an independent mod
 
 | File | Purpose |
 |---|---|
-| `cases.py` | Sample complaint cases with SCRIBE summaries, TRACE categories, and agent resolutions |
-| `judge.py` | The LLM Judge — grades SCRIBE, TRACE, and resolution independently |
+| `cases.py` | Sample complaint cases with SCRIBE summaries and TRACE categories |
+| `judge.py` | The LLM Judge — grades SCRIBE and TRACE output independently |
 | `run.py` | Orchestrates the workflow and shows HITL routing results |
 
 ---
@@ -83,9 +82,14 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
-Run:
+Run the pipeline:
 ```bash
-python run.py
+python3 run.py
+```
+
+Run the consistency check test:
+```bash
+python3 test_consistency.py
 ```
 
 ---
@@ -93,13 +97,19 @@ python run.py
 ## Example Output
 
 ```
-COMP-002  PASS          SCRIBE:1.00  TRACE:1.00  RESOLUTION:0.95  → auto-approved
-COMP-005  PASS          SCRIBE:0.95  TRACE:1.00  RESOLUTION:0.90  → auto-approved
-COMP-003  NEEDS_REVIEW  SCRIBE:0.70  TRACE:1.00  RESOLUTION:0.65  → human queue
-COMP-004  NEEDS_REVIEW  SCRIBE:1.00  TRACE:1.00  RESOLUTION:0.60  → human queue
-COMP-001  NEEDS_REVIEW  SCRIBE:1.00  TRACE:0.50  RESOLUTION:0.95  → human queue
+── COMP-001 ──
+Verdict: PASS
+...
+  SCRIBE scores (avg: 0.77)
+  TRACE score: 1.00
 
-Manual review workload reduced by 40% (2 of 5 cases handled by LLM Judge)
+── COMP-003 ──
+Verdict: NEEDS_REVIEW
+...
+  SCRIBE scores (avg: 0.54)
+  TRACE score: 1.00
+
+Manual review workload reduced by 60% (3 of 5 cases handled by LLM Judge)
 ```
 
 ---
