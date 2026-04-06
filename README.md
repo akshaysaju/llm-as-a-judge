@@ -147,7 +147,7 @@ Reply with JSON only. Example: {{"reasoning": "your step-by-step analysis", "sco
 
 ---
 
-## Example Output
+## Test Results
 
 ```text
   Case       Faith   Cover   Action   Concise   Clarity   Urgency   Entity   TRACE   Ratio           Verdict       
