@@ -1,0 +1,87 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║              profile_routing.yaml — Business Condition → Profile Router      ║
+# ║                                                                              ║
+# ║  Rules are evaluated TOP → BOTTOM. First matching rule wins.                 ║
+# ║  If no rule matches, default_profile is used.                                ║
+# ║                                                                              ║
+# ║  Available condition fields (all optional, case-insensitive matching):       ║
+# ║    trace_category_prefix : complaint category starts with this string        ║
+# ║    trace_category_exact  : complaint category exactly equals this string     ║
+# ║    severity              : case severity level (low / medium / high)         ║
+# ║    department            : internal department (fraud, billing, loans, etc.) ║
+# ║    risk_level            : explicit risk tag (low / medium / high)           ║
+# ║    complaint_type        : broad type tag (fraud, loan, billing, access, cs) ║
+# ║                                                                              ║
+# ║  Multiple conditions in one rule are AND-ed together.                        ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+default_profile: standard
+
+routing_rules:
+
+  # ── Fraud Rules (highest priority — always evaluated first) ─────────────────
+
+  - name: "Fraud: Identity theft — most stringent possible"
+    description: "Identity theft requires the deepest faithfulness and entity checks"
+    conditions:
+      trace_category_exact: "Fraud/Identity Theft"
+    profile: fraud_focused
+
+  - name: "Fraud: Unauthorised Transaction"
+    description: "Any fraud transaction complaint goes to fraud-focused profile"
+    conditions:
+      trace_category_prefix: "Fraud/"
+    profile: fraud_focused
+
+  - name: "Fraud: High-severity explicit risk tag"
+    description: "Any case tagged as high risk with fraud complaint type"
+    conditions:
+      risk_level: high
+      complaint_type: fraud
+    profile: fraud_focused
+
+  # ── Compliance / High-Severity Rules ────────────────────────────────────────
+
+  - name: "High severity + compliance department"
+    description: "Compliance reviews of high-severity cases get stringent evaluation"
+    conditions:
+      severity: high
+      department: compliance
+    profile: stringent
+
+  - name: "High risk level — any type"
+    description: "Any case explicitly tagged high risk uses stringent profile"
+    conditions:
+      risk_level: high
+    profile: stringent
+
+  - name: "High severity — any department"
+    description: "High severity always escalates to stringent evaluation"
+    conditions:
+      severity: high
+    profile: stringent
+
+  # ── Loan / Mortgage Rules ────────────────────────────────────────────────────
+
+  - name: "Loan/Mortgage complaints"
+    description: "Loan complaints need special timeline and action-clarity weighting"
+    conditions:
+      trace_category_prefix: "Loan/"
+    profile: loan_focused
+
+  - name: "Loan complaint type tag"
+    conditions:
+      complaint_type: loan
+    profile: loan_focused
+
+  # ── Medium Severity — escalate to stringent ──────────────────────────────────
+
+  - name: "Medium severity + compliance department"
+    description: "Compliance department gets stringent even for medium severity"
+    conditions:
+      severity: medium
+      department: compliance
+    profile: stringent
+
+  # ── Default fallthrough ──────────────────────────────────────────────────────
+  # (No rule needed — handled by default_profile: standard above)

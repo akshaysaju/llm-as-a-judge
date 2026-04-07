@@ -1,69 +1,111 @@
-# Complaint LLM-as-a-Judge POC
+# Complaint LLM-as-a-Judge — Decoupled Profile Edition
 
-A proof of concept for using an LLM to automatically grade banking complaint cases — reducing the manual review workload as complaint volume scales.
+A proof of concept for using LLMs to automatically grade banking complaint cases — reducing the manual review workload as complaint volume scales.
 
----
-
-## Problem
-
-**SCRIBE** summarizes incoming customer complaints in real-time. A sample of those cases is sent to a manual review queue where humans check:
-- Is the summary accurate?
-- Is the complaint category correct?
-- Did the agent actually resolve the issue?
-
-As adoption scales in 2026, the manual review queue grows faster than the team can handle it.
+The v2 architecture introduces a fully decoupled, YAML-driven evaluation system where **business conditions map to evaluation profiles**, which map to specific criteria, judge models, weights, and thresholds — all configurable without touching Python code.
 
 ---
 
-## Solution
-
-An **LLM Judge** grades each case automatically and routes it:
+## Architecture
 
 ```
-PASS          → auto-approved, removed from manual queue
-NEEDS_REVIEW  → sent to human reviewer
-FAIL          → escalated to senior reviewer
+Business Condition (complaint type, severity, department, risk level)
+         │
+         ▼  profile_routing.yaml  (first-match routing rules)
+Evaluation Profile  (standard / stringent / fraud_focused / loan_focused)
+         │
+         ▼  evaluation_profiles.yaml
+  Per-Criterion Config:
+    ├── enabled?         (true/false — skip entirely if false)
+    ├── judge_model      (which Ollama model evaluates this criterion)
+    ├── weight           (influence on weighted average score)
+    ├── pass_threshold   (per-criterion override, falls back to profile-level)
+    └── fail_threshold   (per-criterion override, falls back to profile-level)
+         │
+         ▼
+  Verdict (Option B — strict):
+    PASS         → weighted_avg ≥ profile.pass_threshold
+                   AND no single criterion below its own fail_threshold
+    FAIL         → weighted_avg < profile.fail_threshold
+                   OR any individual criterion below its fail_threshold
+    NEEDS_REVIEW → everything else
 ```
-
-This reduces manual workload — only borderline and failed cases reach a human.
 
 ---
 
-## How it works
+## Profiles
 
-```
-Complaint Case (already processed by SCRIBE + TRACE + Agent)
-        │
-        ▼
-   ┌──────────┐
-   │  JUDGE   │  reads: raw complaint + SCRIBE summary + TRACE category
-   │ (mistral)│
-   └────┬─────┘
-        │  grades 2 things independently
-        ├── SCRIBE Grade      → is the summary accurate, faithful, and action-oriented?
-        └── TRACE Grade       → is the complaint category correct?
-                │
-        ┌───────┴────────┐
-        │  Routing Logic  │
-        │  min ≥ 0.75    →  PASS
-        │  min < 0.50    →  FAIL
-        │  otherwise     →  NEEDS_REVIEW
-        └────────────────┘
-```
+| Profile | Description | Pass ≥ | Fail < | Models Used |
+|---|---|---|---|---|
+| `standard` | General/low-risk complaints | 0.75 | 0.50 | mistral, llama3.2 |
+| `stringent` | High-risk / compliance | 0.80 | 0.60 | gemma3:4b, mistral, llama3.2 |
+| `fraud_focused` | Fraud / identity theft | 0.78 | 0.55 | gemma3:4b, mistral, llama3.2 |
+| `loan_focused` | Loan / mortgage complaints | 0.75 | 0.50 | mistral, llama3.2 |
 
-### Why a different model as Judge?
+### Why different models per profile?
 
-SCRIBE and TRACE use `llama3.2`. The Judge uses `mistral` — an independent model that has not seen these outputs before, so its grading is unbiased. Same reason you don't let a student mark their own exam.
+| Model | Role | Used for |
+|---|---|---|
+| `gemma3:4b` | Strict reasoning judge | Faithfulness/entity checks in fraud & compliance |
+| `mistral` | General fast judge | Primary judge for most criteria |
+| `llama3.2` | Lightweight judge | Combined metrics (conciseness, clarity, entity) |
+
+> **Why a separate model for each criterion?**
+> Just as you don't let a student mark their own exam, different LLMs have different reasoning styles. Using a stricter model (gemma3:4b) for fraud entity checks — while keeping a fast model (llama3.2) for lightweight metrics — gives both quality and speed.
 
 ---
 
-## Files
+## Routing Rules
 
-| File | Purpose |
+Rules in `config/profile_routing.yaml` are evaluated **top → bottom**. First match wins.
+
+| Condition | Profile |
 |---|---|
-| `cases.py` | Sample complaint cases with SCRIBE summaries and TRACE categories |
-| `judge.py` | The LLM Judge — grades SCRIBE and TRACE output independently |
-| `run.py` | Orchestrates the workflow and shows HITL routing results |
+| Category = `Fraud/Identity Theft` | `fraud_focused` |
+| Category starts with `Fraud/` | `fraud_focused` |
+| `risk_level=high` AND `complaint_type=fraud` | `fraud_focused` |
+| `severity=high` AND `department=compliance` | `stringent` |
+| `risk_level=high` (any type) | `stringent` |
+| `severity=high` (any dept) | `stringent` |
+| Category starts with `Loan/` | `loan_focused` |
+| `complaint_type=loan` | `loan_focused` |
+| `severity=medium` AND `department=compliance` | `stringent` |
+| *(fallthrough)* | `standard` |
+
+---
+
+## Criteria Reference
+
+| Criterion | What it checks | Standard | Stringent | Fraud | Loan |
+|---|---|:---:|:---:|:---:|:---:|
+| `faithfulness` | Did the summary hallucinate anything? | ✅ ×1.5 | ✅ ×2.0 | ✅ ×3.0 | ✅ ×1.5 |
+| `coverage` | Did it capture problem, ask, urgency? | ✅ ×1.0 | ✅ ×2.0 | ✅ ×2.0 | ✅ ×2.0 |
+| `action_orientedness` | Can an agent immediately act on it? | ✅ ×1.0 | ✅ ×1.5 | ✅ ×1.5 | ✅ ×2.0 |
+| `conciseness` | Is it appropriately compressed? | ✅ ×0.75 | ✅ ×1.0 | ❌ off | ✅ ×0.75 |
+| `clarity` | Is it understandable in 5 seconds? | ✅ ×0.75 | ✅ ×1.0 | ✅ ×0.75 | ✅ ×1.0 |
+| `urgency_tone` | Does tone match original severity? | ❌ off | ✅ ×1.5 | ✅ ×2.0 | ✅ ×1.5 |
+| `entity_preservation` | Are amounts/dates/IDs retained? | ✅ ×1.0 | ✅ ×2.0 | ✅ ×3.0 | ✅ ×1.5 |
+| `trace_classification` | Is the complaint category correct? | ✅ ×1.5 | ✅ ×2.0 | ✅ ×3.0 | ✅ ×1.5 |
+
+> **Weights** (×N) directly influence the weighted average. A `faithfulness` score of 0.4 in `fraud_focused` has 3× the drag compared to the same score in `standard`.
+
+---
+
+## File Structure
+
+```
+complaint_judge/
+├── config/
+│   ├── evaluation_profiles.yaml   # Profile definitions (criteria, models, thresholds)
+│   └── profile_routing.yaml       # Business condition → profile routing rules
+├── judge.py                        # Profile-driven LLM Judge (zero hardcoded values)
+├── profile_loader.py              # YAML loader + profile resolver
+├── cases.py                       # Test cases with severity/department/risk_level metadata
+├── run.py                         # Orchestrates grading + prints rich output
+├── test_profiles.py               # Config & routing unit tests (no LLM calls)
+├── requirements.txt               # langchain-ollama, rich, PyYAML
+└── detailed_report.txt            # Generated audit log after run.py
+```
 
 ---
 
@@ -73,107 +115,116 @@ SCRIBE and TRACE use `llama3.2`. The Judge uses `mistral` — an independent mod
 
 Pull the required models:
 ```bash
-ollama pull llama3.2
-ollama pull mistral
+ollama pull mistral          # primary general judge
+ollama pull gemma3:4b        # strict reasoning judge (fraud/compliance)
+ollama pull llama3.2         # lightweight judge (conciseness, clarity)
 ```
 
-Install dependencies:
+Install Python dependencies:
 ```bash
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 
-Run the pipeline:
+---
+
+## Running
+
+### Run the full evaluation pipeline:
 ```bash
 python3 run.py
 ```
 
-Run the consistency check test:
+### Run config + routing tests (no LLM calls, fast):
 ```bash
-python3 test_consistency.py
+python3 test_profiles.py
 ```
+
+---
+
+## Customisation (Zero Code Required)
+
+All of the following can be changed by editing YAML files only — no Python changes needed:
+
+### Turn a metric on or off
+```yaml
+# In config/evaluation_profiles.yaml
+urgency_tone:
+  enabled: false   # ← flip to true to activate
+```
+
+### Swap the judge model for a criterion
+```yaml
+faithfulness:
+  judge_model: gemma3:4b   # ← change to any ollama model
+```
+
+### Adjust scoring thresholds
+```yaml
+# Profile-level
+pass_threshold: 0.80
+fail_threshold: 0.60
+
+# Per-criterion override
+faithfulness:
+  pass_threshold: 0.90    # stricter than profile default
+  fail_threshold: 0.70
+```
+
+### Add a new routing rule
+```yaml
+# In config/profile_routing.yaml
+routing_rules:
+  - name: "VIP customer complaints"
+    conditions:
+      customer_tier: vip
+    profile: stringent
+```
+
+### Add a new profile
+Copy an existing profile block in `evaluation_profiles.yaml`, name it, adjust criteria, and add a routing rule to point to it. No Python required.
 
 ---
 
 ## Scoring Details
 
-The system calculates scores using a combination of LLM evaluation, normalisation, and deterministic logic:
+### Weighted Score
 
-1. **Raw LLM Scoring (1 to 5):** The LLM evaluates the complaint and summary against specific rubrics via Chain-of-Thought, assigning an integer score. A `1` represents failure (e.g., hallucinated facts), while a `5` represents perfect execution.
-2. **Normalisation (0.0 to 1.0):** The `1-5` integer is mathematically divided by 5 to create a strict percentage score (e.g., an LLM score of 3 becomes `0.60`).
-3. **SCRIBE Average:** The final SCRIBE score is an average of 7 distinct LLM dimensions. 
-4. **Deterministic Metrics:** The script independently assesses the summaries using pure Python:
-   - *Compression Ratio:* `len(summary) / len(complaint)`. Summaries manually checked against a strict `0.10 - 0.40` acceptable range. 
-   - *Entity Recall:* Uses Regex to strictly check what percentage of extracted entities (e.g., `$35`, `March 28th`) survived the summarisation.
-
-### Metric Definitions (What and Why)
-The Judge evaluates the upstream systems across these specific dimensions:
-
-#### SCRIBE Metrics (Summarisation Quality)
-*   **Faithfulness:** *Did the summary make things up?* Important to ensure the AI did not hallucinate completely new facts not present in the original complaint.
-*   **Coverage:** *Did it miss the main point?* Verifies the summary successfully captured the core problem, the impact on the customer, and the customer's actual ask.
-*   **Action-Orientedness:** *Can an agent act on this?* A support agent should be able to instantly read the summary and know the exact next step without digging into the original complaint.
-*   **Conciseness:** *Is it bloated?* The goal of SCRIBE is compression. If it's too vague or too long, it fails its purpose.
-*   **Clarity:** *Is it an easy read?* Ensures the grammar and structure can be comprehended by a human agent in under 5 seconds.
-*   **Urgency Tone:** *Is the customer screaming?* If the original text is highly severe or angry, the summary must retain that tone so human queues can prioritise the ticket appropriately.
-*   **Entity Preservation:** *Did we lose the data?* Crucial check to ensure IDs, dates (e.g., `March 28th`), and monetary amounts (e.g., `$4,200`) weren't stripped out by the summariser.
-
-#### TRACE Metrics (Classification Quality)
-*   **Classification:** *Did it go to the right department?* Ensures the ticket was correctly assigned to a category (e.g., *Fraud* vs *Billing Dispute*). If misclassified, it creates immense friction in the support pipeline.
-
-### Prompt Example
-The judge asks the LLM to provide step-by-step reasoning *before* scoring to prevent score drift.
-
-**Example: Faithfulness Prompt**
-```text
-You are evaluating a complaint summary for faithfulness.
-
-Step 1 — List every factual claim in the summary.
-Step 2 — For each claim, check if it is present in the original complaint.
-Step 3 — Score using this rubric:
-  1 = Summary contains facts not present in the complaint (hallucination)
-  2 = Summary has significant paraphrasing that distorts meaning
-  3 = Summary is mostly faithful, minor wording differences only
-  4 = All claims traceable but one small detail is off
-  5 = Every claim in the summary can be traced directly to the complaint
-
-Original Complaint:
-{complaint}
-
-SCRIBE Summary:
-{summary}
-
-Reply with JSON only. Example: {{"reasoning": "your step-by-step analysis", "score": 4}}
+```
+weighted_avg = Σ(score_i × weight_i) / Σ(weight_i)
+               for all enabled criteria
 ```
 
----
+### Verdict Logic (Option B — Strict)
 
-## Test Results
+```
+PASS         → weighted_avg ≥ pass_threshold
+               AND no criterion score < its fail_threshold
 
-```text
-  Case       Faith   Cover   Action   Concise   Clarity   Urgency   Entity   TRACE   Ratio           Verdict       
- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 
-  COMP-001    0.60    0.60     1.00      0.60      1.00      0.60     1.00    1.00   0.6 too_long    PASS          
-  COMP-002    0.60    0.60     1.00      0.60      1.00      0.60     1.00    1.00   0.64 too_long   PASS          
-  COMP-003    0.80    0.40     0.80      0.20      0.60      0.60     0.40    1.00   0.26 ok         NEEDS_REVIEW  
-  COMP-004    0.80    0.40     1.00      0.60      1.00      0.60     1.00    0.00   0.6 too_long    FAIL          
-  COMP-005    0.60    0.40     1.00      0.60      1.00      0.80     1.00    1.00   0.93 too_long   PASS          
+FAIL         → weighted_avg < fail_threshold
+               OR any criterion score < its own fail_threshold
 
-Routing
-  PASS         3/5 — auto-approved
-  NEEDS_REVIEW 1/5 — human queue
-  FAIL         1/5 — escalated
-
-  Workload reduced by 60%
+NEEDS_REVIEW → everything else
 ```
 
----
+This means a single badly-scored criterion (e.g., `faithfulness = 0.2` in `fraud_focused`) will trigger `FAIL` regardless of the weighted average — matching real-world compliance requirements.
 
-## Routing Thresholds
+### Non-LLM Deterministic Metrics (always run)
 
-| Threshold | Verdict | Meaning |
+| Metric | Formula | Acceptable Range |
 |---|---|---|
-| All scores ≥ 0.75 | `PASS` | Case is good — auto-approved |
-| Any score < 0.50 | `FAIL` | Something seriously wrong — escalate |
-| Otherwise | `NEEDS_REVIEW` | Human should review |
+| `compression_ratio` | `len(summary) / len(complaint)` | 0.10 – 0.40 |
+| `entity_recall` | regex-extracted entities found in summary | — |
 
-Thresholds are configurable in `judge.py`.
+---
+
+## Test Cases
+
+| Case | Complaint Type | Severity | Department | → Profile | Note |
+|---|---|---|---|---|---|
+| COMP-001 | Billing | low | billing | `standard` | Good summary |
+| COMP-002 | Fraud/Transaction | high | fraud | `fraud_focused` | Good summary |
+| COMP-003 | Loan/Mortgage | medium | loans | `loan_focused` | **Weak summary** — judge should catch |
+| COMP-004 | Fraud/Identity | high | fraud | `fraud_focused` | **Wrong category** — judge should catch |
+| COMP-005 | Account Access | medium | customer_service | `standard` | Good summary |
+| COMP-006 | Billing/Compliance | high | compliance | `stringent` | Regulatory risk |
+| COMP-007 | Customer Service | low | customer_service | `standard` | Good summary |

@@ -1,0 +1,92 @@
+[
+    {
+        "id": "COMP-001",
+        "severity": "low",
+        "risk_level": "low",
+        "department": "billing",
+        "complaint_type": "billing",
+        "complaint": "I was charged a $35 overdraft fee on March 28th even though I transferred money into my account the same morning at 9:15 AM. The charge hit at 9:40 AM. I've been a customer for 11 years. I want the fee refunded and an explanation.",
+        "scribe_summary": "Customer charged $35 overdraft fee on March 28 despite depositing funds same morning at 9:15 AM before the 9:40 AM charge. 11-year customer requesting refund and explanation.",
+        "trace_category": "Billing/Fees Dispute",
+        "overrides": {
+            "entity_preservation": {
+                "enabled": false
+            },
+            "faithfulness": {
+                "judge_model": "gemma3:4b",
+                "weight": 2.0
+            }
+        }
+    },
+    {
+        "id": "COMP-002",
+        "severity": "high",
+        "risk_level": "high",
+        "department": "fraud",
+        "complaint_type": "fraud",
+        "complaint": "Two transactions I did not make appeared on April 1st: $249.99 from StreamPlus EU and $89 from VPN Shield Pro. I live in Texas, these are European merchants. My card is still with me. I believe my card details were stolen online.",
+        "scribe_summary": "Unauthorized charges of $249.99 (StreamPlus EU) and $89 (VPN Shield Pro) on April 1st. Customer in Texas suspects online card theft. Card still in possession. Requesting investigation.",
+        "trace_category": "Fraud/Unauthorised Transaction"
+    },
+    {
+        "id": "COMP-003",
+        "severity": "medium",
+        "risk_level": "medium",
+        "department": "loans",
+        "complaint_type": "loan",
+        "complaint": "I applied for a home equity loan 6 weeks ago with all documents submitted. Was told 2-3 weeks processing. No one has contacted me. Emailed loan officer 3 times. My contractor is waiting and I'm losing money every week.",
+        "scribe_summary": "Customer applied for home loan. Processing delayed. Wants a callback.",
+        "trace_category": "Loan/Mortgage Complaint"
+    },
+    {
+        "id": "COMP-004",
+        "severity": "high",
+        "risk_level": "high",
+        "department": "fraud",
+        "complaint_type": "fraud",
+        "complaint": "Someone opened a credit card in my name using my SSN. I found it on my credit report \u2014 a FinCore card I never applied for with $4,200 in charges. I never received the card or any statements. This is identity theft.",
+        "scribe_summary": "Fraudulent FinCore credit card opened using customer's SSN without consent. $4,200 in charges. Customer never received card or statements. Requesting closure and credit report removal.",
+        "trace_category": "Billing/Fees Dispute"
+    },
+    {
+        "id": "COMP-005",
+        "severity": "medium",
+        "risk_level": "medium",
+        "department": "customer_service",
+        "complaint_type": "access",
+        "complaint": "Locked out of online banking for 4 days. Called twice, both times promised 24-hour fix. Still not fixed. Cannot pay bills or check balance. This is unacceptable.",
+        "scribe_summary": "Customer locked out of online banking for 4 days. Two support calls made with unfulfilled 24-hour resolution promises. Unable to pay bills or check balance.",
+        "trace_category": "Account Access Issue"
+    },
+    {
+        "id": "COMP-006",
+        "severity": "high",
+        "risk_level": "high",
+        "department": "compliance",
+        "complaint_type": "billing",
+        "complaint": "I have been charged hidden foreign transaction fees every month for the past 6 months totalling $312. I never agreed to these fees and they were never disclosed in my account agreement. This may violate CFPB disclosure regulations. I am demanding a full refund and a written explanation of your fee disclosure practices.",
+        "scribe_summary": "Customer charged undisclosed foreign transaction fees for 6 months totalling $312. Claims potential CFPB violation. Demands full refund and written fee disclosure explanation.",
+        "trace_category": "Billing/Fees Dispute"
+    },
+    {
+        "id": "COMP-007",
+        "severity": "low",
+        "risk_level": "low",
+        "department": "customer_service",
+        "complaint_type": "customer_service",
+        "complaint": "I have been trying to close my savings account for two months. Every time I call, I am transferred to a different department and told the previous agent gave me wrong information. I just want the account closed and my remaining $847 balance transferred to my checking account. Nobody seems to know how to help me.",
+        "scribe_summary": "Customer attempting to close savings account for 2 months. Repeatedly transferred between departments with conflicting information. Requesting account closure and $847 transfer to checking.",
+        "trace_category": "Customer Service Complaint"
+    },
+    {
+        "id": "COMP-008",
+        "severity": "medium",
+        "risk_level": "low",
+        "department": "cards",
+        "complaint_type": "billing",
+        "complaint": "My credit card interest rate was increased from 14.99% to 23.99% on March 1st without any prior notice. I never received a letter or email about this change. Under the CARD Act, I am supposed to receive 45 days notice before a rate increase. This is a clear regulatory violation. I want my rate restored immediately and all extra interest charges since March 1st refunded — that amounts to approximately $178 in excess interest.",
+        "scribe_summary": "Customer says interest rate went up. Wants refund.",
+        "trace_category": "Billing/Fees Dispute",
+        "note": "Deliberately weak summary — missing: old rate (14.99%), new rate (23.99%), date (March 1st), regulation (CARD Act), 45-day notice rule, $178 excess interest. Judge should catch poor coverage and entity loss."
+    }
+]

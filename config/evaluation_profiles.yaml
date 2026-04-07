@@ -1,0 +1,268 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║              evaluation_profiles.yaml — SCRIBE Evaluation Profile Registry   ║
+# ║                                                                              ║
+# ║  SCRIBE = the summarization system. These profiles define HOW to evaluate    ║
+# ║  the quality of a SCRIBE-generated summary.                                  ║
+# ║                                                                              ║
+# ║  NOTE: TRACE (complaint classification) is a SEPARATE evaluation system.     ║
+# ║  It is NOT evaluated here. SCRIBE evaluation focuses purely on summary       ║
+# ║  quality: faithfulness, coverage, action clarity, entity accuracy, etc.      ║
+# ║                                                                              ║
+# ║  Each profile defines:                                                       ║
+# ║    pass_threshold / fail_threshold  — profile-level scoring cutoffs          ║
+# ║    criteria                         — map of criterion → settings            ║
+# ║        enabled       : true/false  — run this criterion for this profile     ║
+# ║        judge_model   : which Ollama model evaluates this criterion            ║
+# ║        weight        : contribution to weighted average (default 1.0)        ║
+# ║        pass_threshold: per-criterion pass cutoff (optional, overrides profile)║
+# ║        fail_threshold: per-criterion fail cutoff (optional, overrides profile)║
+# ║                                                                              ║
+# ║  Verdict Logic (Option B — strict):                                          ║
+# ║    PASS         → weighted_avg ≥ profile pass_threshold                      ║
+# ║                   AND no single criterion below its fail_threshold            ║
+# ║    FAIL         → weighted_avg < profile fail_threshold                      ║
+# ║                   OR any individual criterion below its fail_threshold        ║
+# ║    NEEDS_REVIEW → everything else                                             ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+profiles:
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # STANDARD: Default profile for general, low-risk complaints
+  # Models: mistral (primary), llama3.2 (lightweight combined metrics)
+  # ─────────────────────────────────────────────────────────────────────────────
+  standard:
+    description: "Default evaluation for general banking complaints"
+    pass_threshold: 0.75
+    fail_threshold: 0.50
+    criteria:
+
+      faithfulness:
+        enabled: true
+        judge_model: mistral
+        weight: 1.5            # slightly elevated — hallucinations always matter
+        pass_threshold: 0.75
+        fail_threshold: 0.50
+
+      coverage:
+        enabled: true
+        judge_model: mistral
+        weight: 1.0
+        pass_threshold: 0.75
+        fail_threshold: 0.50
+
+      action_orientedness:
+        enabled: true
+        judge_model: mistral
+        weight: 1.0
+        pass_threshold: 0.75
+        fail_threshold: 0.50
+
+      conciseness:
+        enabled: true
+        judge_model: llama3.2  # lightweight metric — small model is fine
+        weight: 0.75
+        pass_threshold: 0.60   # more lenient — not a critical quality gate
+        fail_threshold: 0.40
+
+      clarity:
+        enabled: true
+        judge_model: llama3.2
+        weight: 0.75
+        pass_threshold: 0.60
+        fail_threshold: 0.40
+
+      urgency_tone:
+        enabled: false         # not critical for standard complaints
+        judge_model: mistral
+        weight: 0.75
+        pass_threshold: 0.60
+        fail_threshold: 0.40
+
+      entity_preservation:
+        enabled: true
+        judge_model: mistral
+        weight: 1.0
+        pass_threshold: 0.75
+        fail_threshold: 0.50
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # STRINGENT: High-risk and compliance complaints
+  # Every metric on, tighter thresholds, stricter models on critical dimensions.
+  # Models: gemma3:4b (critical criteria), mistral (rest), llama3.2 (lightweight)
+  # ─────────────────────────────────────────────────────────────────────────────
+  stringent:
+    description: "High-risk / compliance complaints — all metrics, tighter thresholds"
+    pass_threshold: 0.80
+    fail_threshold: 0.60
+    criteria:
+
+      faithfulness:
+        enabled: true
+        judge_model: gemma3:4b  # stricter reasoning model
+        weight: 2.0
+        pass_threshold: 0.85
+        fail_threshold: 0.65
+
+      coverage:
+        enabled: true
+        judge_model: gemma3:4b
+        weight: 2.0
+        pass_threshold: 0.80
+        fail_threshold: 0.60
+
+      action_orientedness:
+        enabled: true
+        judge_model: mistral
+        weight: 1.5
+        pass_threshold: 0.80
+        fail_threshold: 0.60
+
+      conciseness:
+        enabled: true
+        judge_model: llama3.2
+        weight: 1.0
+        pass_threshold: 0.70
+        fail_threshold: 0.50
+
+      clarity:
+        enabled: true
+        judge_model: llama3.2
+        weight: 1.0
+        pass_threshold: 0.70
+        fail_threshold: 0.50
+
+      urgency_tone:
+        enabled: true          # must preserve urgency in high-risk cases
+        judge_model: mistral
+        weight: 1.5
+        pass_threshold: 0.75
+        fail_threshold: 0.55
+
+      entity_preservation:
+        enabled: true
+        judge_model: gemma3:4b  # entity accuracy critical for compliance
+        weight: 2.0
+        pass_threshold: 0.85
+        fail_threshold: 0.65
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # FRAUD_FOCUSED: Fraud / unauthorised transaction complaints
+  # Heavy weight on faithfulness and entity_preservation.
+  # A hallucinated amount or wrong date on a fraud case is dangerous.
+  # Models: gemma3:4b (fraud-critical), mistral (general), llama3.2 (lightweight)
+  # ─────────────────────────────────────────────────────────────────────────────
+  fraud_focused:
+    description: "Fraud complaints — deep faithfulness and entity checks"
+    pass_threshold: 0.78
+    fail_threshold: 0.55
+    criteria:
+
+      faithfulness:
+        enabled: true
+        judge_model: gemma3:4b  # fraud needs careful fact checking
+        weight: 3.0             # triple-weighted — a hallucinated amount is dangerous
+        pass_threshold: 0.80
+        fail_threshold: 0.60
+
+      coverage:
+        enabled: true
+        judge_model: gemma3:4b
+        weight: 2.0
+        pass_threshold: 0.78
+        fail_threshold: 0.58
+
+      action_orientedness:
+        enabled: true
+        judge_model: mistral
+        weight: 1.5
+        pass_threshold: 0.75
+        fail_threshold: 0.55
+
+      conciseness:
+        enabled: false         # fraud tickets tolerate longer summaries
+        judge_model: llama3.2
+        weight: 0.5
+        pass_threshold: 0.55
+        fail_threshold: 0.35
+
+      clarity:
+        enabled: true
+        judge_model: llama3.2
+        weight: 0.75
+        pass_threshold: 0.65
+        fail_threshold: 0.45
+
+      urgency_tone:
+        enabled: true          # fraud is always urgent — must be reflected in summary
+        judge_model: mistral
+        weight: 2.0
+        pass_threshold: 0.75
+        fail_threshold: 0.55
+
+      entity_preservation:
+        enabled: true
+        judge_model: gemma3:4b  # amounts, dates, card numbers MUST survive in summary
+        weight: 3.0
+        pass_threshold: 0.85
+        fail_threshold: 0.65
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # LOAN_FOCUSED: Loan / mortgage complaints
+  # Timeline accuracy and action clarity are the critical dimensions.
+  # Models: mistral (primary), llama3.2 (lightweight)
+  # ─────────────────────────────────────────────────────────────────────────────
+  loan_focused:
+    description: "Loan/mortgage complaints — timeline, action clarity, and urgency"
+    pass_threshold: 0.75
+    fail_threshold: 0.50
+    criteria:
+
+      faithfulness:
+        enabled: true
+        judge_model: mistral
+        weight: 1.5
+        pass_threshold: 0.75
+        fail_threshold: 0.50
+
+      coverage:
+        enabled: true
+        judge_model: mistral
+        weight: 2.0            # loan complaints have complex timelines — coverage critical
+        pass_threshold: 0.78
+        fail_threshold: 0.55
+
+      action_orientedness:
+        enabled: true
+        judge_model: mistral
+        weight: 2.0            # what does the customer want? must be crystal clear
+        pass_threshold: 0.78
+        fail_threshold: 0.55
+
+      conciseness:
+        enabled: true
+        judge_model: llama3.2
+        weight: 0.75
+        pass_threshold: 0.60
+        fail_threshold: 0.40
+
+      clarity:
+        enabled: true
+        judge_model: llama3.2
+        weight: 1.0
+        pass_threshold: 0.65
+        fail_threshold: 0.45
+
+      urgency_tone:
+        enabled: true          # "losing money every week" — urgency must be preserved
+        judge_model: mistral
+        weight: 1.5
+        pass_threshold: 0.75
+        fail_threshold: 0.55
+
+      entity_preservation:
+        enabled: true
+        judge_model: mistral   # dates and timelines crucial for loan resolution
+        weight: 1.5
+        pass_threshold: 0.78
+        fail_threshold: 0.55

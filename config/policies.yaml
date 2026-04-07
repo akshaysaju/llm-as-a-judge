@@ -1,0 +1,82 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║              policies.yaml — Business Policy → Eval Profile Router            ║
+# ║                                                                              ║
+# ║  This file answers ONE question:                                             ║
+# ║    "Given what we know about this complaint, which evaluation profile         ║
+# ║     (rulebook) should we use?"                                               ║
+# ║                                                                              ║
+# ║  Rules are evaluated TOP → BOTTOM. First matching policy wins.               ║
+# ║  If no policy matches, default_profile is used.                              ║
+# ║                                                                              ║
+# ║  Available condition fields (all optional — combine freely):                 ║
+# ║    severity   : low / medium / high  (from case metadata)                    ║
+# ║    keywords   : any word/phrase found anywhere in the complaint text          ║
+# ║                 (case-insensitive, partial match supported)                   ║
+# ║                                                                              ║
+# ║  Multiple fields in one policy are AND-ed.                                   ║
+# ║  Multiple keywords in one policy are OR-ed.                                  ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+default_profile: standard
+
+policies:
+
+  # ── Fraud Policies (highest priority) ───────────────────────────────────────
+  # Fraud complaints need the deepest fact-checking and entity preservation.
+  # Keyword match casts a wide net — if the complaint uses fraud language,
+  # it gets the fraud-focused profile regardless of metadata tags.
+
+  - name: fraud_complaints
+    description: "Any complaint mentioning fraud, theft, or unauthorized charges"
+    conditions:
+      keywords:
+        - "fraud"
+        - "unauthorized"
+        - "unauthorised"
+        - "identity theft"
+        - "stolen card"
+        - "card details stolen"
+        - "chargeback"
+        - "dispute charge"
+    eval_profile: fraud_focused
+
+  # ── High-Risk / Regulatory Policies ─────────────────────────────────────────
+  # Regulatory and legal language in a complaint is a strong signal for stringent
+  # evaluation — even if severity isn't tagged as high.
+
+  - name: high_risk_complaints
+    description: "Complaints with regulatory / legal references or tagged high severity"
+    conditions:
+      keywords:
+        - "CFPB"
+        - "regulator"
+        - "regulatory"
+        - "legal action"
+        - "lawsuit"
+        - "violation"
+        - "compliance"
+    eval_profile: stringent
+
+  - name: high_severity
+    description: "Catch-all for any complaint explicitly tagged high severity"
+    conditions:
+      severity: high
+    eval_profile: stringent
+
+  # ── Loan / Mortgage Policies ─────────────────────────────────────────────────
+  # Loan complaints need special timeline and action-clarity weighting.
+
+  - name: loan_complaints
+    description: "Loan, mortgage, or home equity complaints"
+    conditions:
+      keywords:
+        - "loan"
+        - "mortgage"
+        - "home equity"
+        - "refinance"
+        - "foreclosure"
+    eval_profile: loan_focused
+
+  # ── Normal Complaints ────────────────────────────────────────────────────────
+  # Everything else falls through to standard evaluation.
+  # No explicit rule needed — handled by default_profile: standard above.
