@@ -69,6 +69,25 @@ class Profile:
     fail_threshold: float
     criteria:       dict[str, Criterion] = field(default_factory=dict)
 
+    # ── Prompt mode ───────────────────────────────────────────────────────────
+    # Controls how this profile calls LLMs for its criteria.
+    #
+    #  all_in_one    → ONE LLM call per evaluation, returns ALL criterion scores
+    #                   in a single JSON response. Most efficient.
+    #                   Requires: combined_prompt pointing to a prompts.yaml entry
+    #                   whose outputs lists all enabled criteria.
+    #
+    #  per_criterion → Each criterion gets its own independent LLM call.
+    #                   No grouping. Most granular and flexible.
+    #                   Each criterion uses its own prompt: key.
+    #
+    #  mixed         → (default) Criteria that share the same combined prompt
+    #                   are batched into one call; others get individual calls.
+    #                   Set prompt: quality_combined on multiple criteria to group them.
+    #
+    prompt_mode:     str = "mixed"   # all_in_one | per_criterion | mixed
+    combined_prompt: str = ""        # only used when prompt_mode = all_in_one
+
     @property
     def unique_models(self) -> list[str]:
         """All distinct Ollama model names referenced by enabled criteria."""
@@ -214,11 +233,13 @@ class ProfileLoader:
                     fail_threshold = crit_data.get("fail_threshold"),
                 )
             profiles[name] = Profile(
-                name           = name,
-                description    = data.get("description", ""),
-                pass_threshold = float(data.get("pass_threshold", 0.75)),
-                fail_threshold = float(data.get("fail_threshold", 0.50)),
-                criteria       = criteria,
+                name            = name,
+                description     = data.get("description", ""),
+                pass_threshold  = float(data.get("pass_threshold", 0.75)),
+                fail_threshold  = float(data.get("fail_threshold", 0.50)),
+                criteria        = criteria,
+                prompt_mode     = data.get("prompt_mode", "mixed"),
+                combined_prompt = data.get("combined_prompt", ""),
             )
         return profiles
 

@@ -29,12 +29,14 @@ profiles:
 
   # ─────────────────────────────────────────────────────────────────────────────
   # STANDARD: Default profile for general, low-risk complaints
-  # Models: mistral (primary), llama3.2 (lightweight combined metrics)
+  # prompt_mode: per_criterion — every metric gets its own individual LLM call
+  # Models: mistral (primary), llama3.2 (lightweight)
   # ─────────────────────────────────────────────────────────────────────────────
   standard:
     description: "Default evaluation for general banking complaints"
     pass_threshold: 0.75
     fail_threshold: 0.50
+    prompt_mode: per_criterion   # each criterion → its own LLM call, its own prompt
     criteria:
 
       faithfulness:
@@ -95,13 +97,15 @@ profiles:
 
   # ─────────────────────────────────────────────────────────────────────────────
   # STRINGENT: High-risk and compliance complaints
-  # Every metric on, tighter thresholds, stricter models on critical dimensions.
+  # prompt_mode: mixed — faithfulness/coverage/urgency are standalone calls;
+  #   conciseness/clarity/entity_preservation share one combined call
   # Models: gemma3:4b (critical criteria), mistral (rest), llama3.2 (lightweight)
   # ─────────────────────────────────────────────────────────────────────────────
   stringent:
     description: "High-risk / compliance complaints — all metrics, tighter thresholds"
     pass_threshold: 0.80
     fail_threshold: 0.60
+    prompt_mode: mixed           # some single, some combined — balanced approach
     criteria:
 
       faithfulness:
@@ -162,14 +166,17 @@ profiles:
 
   # ─────────────────────────────────────────────────────────────────────────────
   # FRAUD_FOCUSED: Fraud / unauthorised transaction complaints
-  # Heavy weight on faithfulness and entity_preservation.
-  # A hallucinated amount or wrong date on a fraud case is dangerous.
-  # Models: gemma3:4b (fraud-critical), mistral (general), llama3.2 (lightweight)
+  # prompt_mode: all_in_one — ONE LLM call evaluates ALL criteria at once
+  #   Uses fraud_all_criteria prompt with investigation/fact-checking framing.
+  #   Most efficient: saves 5-6 LLM calls vs per_criterion.
+  # Models: gemma3:4b (the single call uses the main judge_model here)
   # ─────────────────────────────────────────────────────────────────────────────
   fraud_focused:
     description: "Fraud complaints — deep faithfulness and entity checks"
     pass_threshold: 0.78
     fail_threshold: 0.55
+    prompt_mode: all_in_one        # ONE call for ALL criteria — fraud investigation framing
+    combined_prompt: fraud_all_criteria
     criteria:
 
       faithfulness:
@@ -230,13 +237,14 @@ profiles:
 
   # ─────────────────────────────────────────────────────────────────────────────
   # LOAN_FOCUSED: Loan / mortgage complaints
-  # Timeline accuracy and action clarity are the critical dimensions.
+  # prompt_mode: mixed — same as stringent but with loan-specific per-criterion prompts
   # Models: mistral (primary), llama3.2 (lightweight)
   # ─────────────────────────────────────────────────────────────────────────────
   loan_focused:
     description: "Loan/mortgage complaints — timeline, action clarity, and urgency"
     pass_threshold: 0.75
     fail_threshold: 0.50
+    prompt_mode: mixed           # some single, some combined
     criteria:
 
       faithfulness:

@@ -219,40 +219,98 @@ class Judge:
 
         inputs = {"complaint": complaint, "summary": summary}
 
-        # ── Split criteria into single-call and combined-call groups ──────────
-        singles, combined_groups = self._group_by_prompt(criteria)
+        # ── Route by prompt_mode ──────────────────────────────────────────────
+        mode = self.profile.prompt_mode  # all_in_one | per_criterion | mixed
 
-        # ── Process single-output criteria ────────────────────────────────────
-        for crit_name, crit in singles:
-            prompt = self.prompt_loader.get(crit.prompt_key)
-            chain  = self._get_chain(prompt.template, crit.judge_model)
-            raw_out = chain.invoke(inputs)
-            parsed  = self._parse(raw_out)
+        if mode == "all_in_one":
+            # ── ALL_IN_ONE: one single LLM call for every criterion ───────────
+            # The profile's combined_prompt must cover all enabled criteria in its outputs.
+            # This is the most efficient mode — saves N-1 LLM round trips.
+            prompt_key = self.profile.combined_prompt
+            if not prompt_key:
+                raise ValueError(
+                    f"Profile '{self.profile.name}' has prompt_mode=all_in_one "
+                    f"but no combined_prompt is set."
+                )
+            prompt    = self.prompt_loader.get(prompt_key)
+            # Use the model of the first enabled criterion as the judge model
+            enabled   = {k: v for k, v in criteria.items() if v.enabled}
+            if not enabled:
+                pass
+            else:
+                first_crit = next(iter(enabled.values()))
+                chain      = self._get_chain(prompt.template, first_crit.judge_model)
+                raw_out    = chain.invoke(inputs)
+                parsed     = self._parse(raw_out)
+                raw["all_in_one"] = raw_out
 
-            scores[crit_name]      = self._norm(parsed.get("score", 1))
-            reasons[crit_name]     = parsed.get("reasoning", "")
-            weights[crit_name]     = crit.weight
-            models_used[crit_name] = crit.judge_model
-            raw[crit_name]         = raw_out
+                for crit_name, crit in enabled.items():
+                    sub = parsed.get(crit_name, {})
+                    # Combined prompt returns {"score": X, "reasoning": "..."} per key
+                    s   = sub.get("score", sub) if isinstance(sub, dict) else sub
+                    r   = sub.get("reasoning", sub.get("reason", "")) if isinstance(sub, dict) else ""
+                    scores[crit_name]      = self._norm(s)
+                    reasons[crit_name]     = r
+                    weights[crit_name]     = crit.weight
+                    models_used[crit_name] = first_crit.judge_model
 
-        # ── Process combined-output criteria ──────────────────────────────────
-        # One LLM call per unique combined prompt; then distribute sub-scores.
-        for prompt_key, crit_names in combined_groups.items():
-            prompt     = self.prompt_loader.get(prompt_key)
-            # Use the model from the first criterion in this group
-            first_crit = criteria[crit_names[0]]
-            chain      = self._get_chain(prompt.template, first_crit.judge_model)
-            raw_out    = chain.invoke(inputs)
-            parsed     = self._parse(raw_out)
-            raw[prompt_key] = raw_out
+        elif mode == "per_criterion":
+            # ── PER_CRITERION: every criterion gets its own dedicated LLM call ─
+            # No grouping even if multiple criteria share the same prompt key.
+            # Most granular — each criterion is independently scored.
+            for crit_name, crit in criteria.items():
+                if not crit.enabled:
+                    continue
+                prompt  = self.prompt_loader.get(crit.prompt_key)
+                chain   = self._get_chain(prompt.template, crit.judge_model)
+                raw_out = chain.invoke(inputs)
+                parsed  = self._parse(raw_out)
 
-            for crit_name in crit_names:
-                crit = criteria[crit_name]
-                sub  = parsed.get(crit_name, {})
-                scores[crit_name]      = self._norm(sub.get("score", 1))
-                reasons[crit_name]     = sub.get("reason", "")
+                # Single prompts return {"reasoning":..., "score":X}
+                # Combined prompts return {crit_name: {"score":X, ...}, ...}
+                # For per_criterion, always read the top-level score
+                score_val  = parsed.get("score") or parsed.get(crit_name, {})
+                if isinstance(score_val, dict):
+                    score_val = score_val.get("score", 1)
+                reason_val = parsed.get("reasoning") or parsed.get("reason", "")
+
+                scores[crit_name]      = self._norm(score_val)
+                reasons[crit_name]     = reason_val
                 weights[crit_name]     = crit.weight
                 models_used[crit_name] = crit.judge_model
+                raw[crit_name]         = raw_out
+
+        else:
+            # ── MIXED (default): criteria sharing a combined prompt → batched;
+            #   all others → individual calls. Balances efficiency and flexibility.
+            singles, combined_groups = self._group_by_prompt(criteria)
+
+            for crit_name, crit in singles:
+                prompt  = self.prompt_loader.get(crit.prompt_key)
+                chain   = self._get_chain(prompt.template, crit.judge_model)
+                raw_out = chain.invoke(inputs)
+                parsed  = self._parse(raw_out)
+                scores[crit_name]      = self._norm(parsed.get("score", 1))
+                reasons[crit_name]     = parsed.get("reasoning", "")
+                weights[crit_name]     = crit.weight
+                models_used[crit_name] = crit.judge_model
+                raw[crit_name]         = raw_out
+
+            for prompt_key, crit_names in combined_groups.items():
+                prompt     = self.prompt_loader.get(prompt_key)
+                first_crit = criteria[crit_names[0]]
+                chain      = self._get_chain(prompt.template, first_crit.judge_model)
+                raw_out    = chain.invoke(inputs)
+                parsed     = self._parse(raw_out)
+                raw[prompt_key] = raw_out
+                for crit_name in crit_names:
+                    crit = criteria[crit_name]
+                    sub  = parsed.get(crit_name, {})
+                    scores[crit_name]      = self._norm(sub.get("score", 1))
+                    reasons[crit_name]     = sub.get("reason", "")
+                    weights[crit_name]     = crit.weight
+                    models_used[crit_name] = crit.judge_model
+
 
         # ── Non-LLM deterministic metrics ────────────────────────────────────
         ratio  = compression_ratio(complaint, summary)

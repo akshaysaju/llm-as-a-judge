@@ -196,3 +196,165 @@ prompts:
         "clarity":             {"score": 1-5, "reason": "one sentence"},
         "entity_preservation": {"score": 1-5, "reason": "one sentence"}
       }
+
+  # ════════════════════════════════════════════════════════════════════════════
+  # PROFILE-SPECIFIC ALL-IN-ONE PROMPTS
+  # ════════════════════════════════════════════════════════════════════════════
+  #
+  # These prompts evaluate ALL criteria in ONE single LLM call.
+  # Used when a profile sets:  prompt_mode: all_in_one
+  #                            combined_prompt: <prompt_name>
+  #
+  # Each profile has its own domain-tuned language:
+  #   - fraud_all_criteria     → investigation and fact-checking framing
+  #   - standard_all_criteria  → general banking / customer service framing
+  #   - stringent_all_criteria → compliance, regulatory, legal framing
+  #   - loan_all_criteria      → timeline, process, escalation framing
+  # ════════════════════════════════════════════════════════════════════════════
+
+  # ── Fraud: All criteria in one call ──────────────────────────────────────────
+  # Framing: you are reviewing a fraud investigation summary.
+  # Faithfulness is explicitly strict — no inferences allowed.
+  fraud_all_criteria:
+    description: "Fraud profile — all criteria, single LLM call, investigation framing"
+    type: combined
+    outputs: [faithfulness, coverage, action_orientedness, conciseness, clarity, urgency_tone, entity_preservation]
+    template: |
+      You are a fraud investigator reviewing a complaint summary. Evaluate it on seven dimensions.
+
+      CRITICAL RULE FOR FAITHFULNESS: A claim is only faithful if the customer EXPLICITLY stated it.
+      Inferences and implied actions count as hallucinations. Do NOT reward "reasonable assumptions".
+
+      Score each dimension 1–5:
+
+        faithfulness        — 1: invented or inferred claims present  5: every claim explicitly in complaint
+        coverage            — 1: missing core fraud details            5: all transactions, dates, amounts captured
+        action_orientedness — 1: agent cannot tell what to do          5: investigation action is crystal clear
+        conciseness         — 1: bloated or too short                  5: sharp and appropriately brief
+        clarity             — 1: confusing fraud narrative             5: agent understands the fraud in 5 seconds
+        urgency_tone        — 1: fraud treated as routine              5: urgency of financial loss fully preserved
+        entity_preservation — 1: amounts/dates/merchants missing       5: every fraud-specific entity retained
+
+      Original Complaint:
+      {complaint}
+
+      SCRIBE Summary:
+      {summary}
+
+      Reply with JSON only:
+      {
+        "faithfulness":        {"score": 1-5, "reasoning": "one sentence"},
+        "coverage":            {"score": 1-5, "reasoning": "one sentence"},
+        "action_orientedness": {"score": 1-5, "reasoning": "one sentence"},
+        "conciseness":         {"score": 1-5, "reasoning": "one sentence"},
+        "clarity":             {"score": 1-5, "reasoning": "one sentence"},
+        "urgency_tone":        {"score": 1-5, "reasoning": "one sentence"},
+        "entity_preservation": {"score": 1-5, "reasoning": "one sentence"}
+      }
+
+  # ── Standard: All criteria in one call ───────────────────────────────────────
+  # Framing: general banking complaint — balanced and pragmatic.
+  standard_all_criteria:
+    description: "Standard profile — all criteria, single LLM call, general banking framing"
+    type: combined
+    outputs: [faithfulness, coverage, action_orientedness, conciseness, clarity, entity_preservation]
+    template: |
+      You are a banking quality reviewer evaluating a customer complaint summary.
+      Score each dimension 1–5.
+
+        faithfulness        — 1: summary adds claims not in complaint  5: everything traceable to complaint
+        coverage            — 1: key issue missing                     5: problem, impact, and ask all captured
+        action_orientedness — 1: agent has no idea what to do          5: next action is completely clear
+        conciseness         — 1: unnecessarily long or too brief       5: tight and useful
+        clarity             — 1: hard to understand quickly            5: agent grasps the situation instantly
+        entity_preservation — 1: amounts/dates/account refs missing    5: all key figures retained
+
+      Original Complaint:
+      {complaint}
+
+      SCRIBE Summary:
+      {summary}
+
+      Reply with JSON only:
+      {
+        "faithfulness":        {"score": 1-5, "reasoning": "one sentence"},
+        "coverage":            {"score": 1-5, "reasoning": "one sentence"},
+        "action_orientedness": {"score": 1-5, "reasoning": "one sentence"},
+        "conciseness":         {"score": 1-5, "reasoning": "one sentence"},
+        "clarity":             {"score": 1-5, "reasoning": "one sentence"},
+        "entity_preservation": {"score": 1-5, "reasoning": "one sentence"}
+      }
+
+  # ── Stringent: All criteria in one call ──────────────────────────────────────
+  # Framing: compliance/regulatory — strictest scoring, all 7 criteria.
+  stringent_all_criteria:
+    description: "Stringent profile — all criteria, single LLM call, compliance/regulatory framing"
+    type: combined
+    outputs: [faithfulness, coverage, action_orientedness, conciseness, clarity, urgency_tone, entity_preservation]
+    template: |
+      You are a compliance officer reviewing a high-risk complaint summary.
+      Apply the strictest possible standards. Score each dimension 1–5.
+
+      NOTE: For faithfulness, treat inferences and regulatory interpretations as hallucinations.
+      The summary must only state what the customer explicitly said.
+
+        faithfulness        — 1: any invented or inferred content      5: every claim letter-for-letter in complaint
+        coverage            — 1: regulatory reference or ask missing   5: violation, impact, and demand all present
+        action_orientedness — 1: compliance team cannot act            5: required regulatory response is obvious
+        conciseness         — 1: vague or padded                       5: crisp — nothing missing, nothing extra
+        clarity             — 1: ambiguous compliance language         5: reviewable by any compliance officer instantly
+        urgency_tone        — 1: regulatory urgency lost               5: escalatory tone fully preserved
+        entity_preservation — 1: regulation names/amounts/dates lost   5: all compliance-critical entities retained
+
+      Original Complaint:
+      {complaint}
+
+      SCRIBE Summary:
+      {summary}
+
+      Reply with JSON only:
+      {
+        "faithfulness":        {"score": 1-5, "reasoning": "one sentence"},
+        "coverage":            {"score": 1-5, "reasoning": "one sentence"},
+        "action_orientedness": {"score": 1-5, "reasoning": "one sentence"},
+        "conciseness":         {"score": 1-5, "reasoning": "one sentence"},
+        "clarity":             {"score": 1-5, "reasoning": "one sentence"},
+        "urgency_tone":        {"score": 1-5, "reasoning": "one sentence"},
+        "entity_preservation": {"score": 1-5, "reasoning": "one sentence"}
+      }
+
+  # ── Loan / Mortgage: All criteria in one call ─────────────────────────────────
+  # Framing: loan/mortgage timelines — process delays, financial impact, escalation.
+  loan_all_criteria:
+    description: "Loan profile — all criteria, single LLM call, timeline/process framing"
+    type: combined
+    outputs: [faithfulness, coverage, action_orientedness, conciseness, clarity, urgency_tone, entity_preservation]
+    template: |
+      You are reviewing a complaint summary about a loan or mortgage issue.
+      Focus on timeline accuracy, financial impact, and clarity of the requested resolution.
+      Score each dimension 1–5.
+
+        faithfulness        — 1: timeline or amounts fabricated        5: all loan details traceable to complaint
+        coverage            — 1: delay duration or financial loss missing  5: timeline, impact, and escalation captured
+        action_orientedness — 1: loan officer cannot determine next step   5: callback, resolution type, and urgency clear
+        conciseness         — 1: too long or omits key dates           5: efficient with all critical dates intact
+        clarity             — 1: loan process timeline is confusing    5: delay and impact are immediately clear
+        urgency_tone        — 1: financial urgency of delay lost       5: ongoing financial loss urgency fully preserved
+        entity_preservation — 1: loan amounts/dates/officer names missing  5: all timeline entities retained
+
+      Original Complaint:
+      {complaint}
+
+      SCRIBE Summary:
+      {summary}
+
+      Reply with JSON only:
+      {
+        "faithfulness":        {"score": 1-5, "reasoning": "one sentence"},
+        "coverage":            {"score": 1-5, "reasoning": "one sentence"},
+        "action_orientedness": {"score": 1-5, "reasoning": "one sentence"},
+        "conciseness":         {"score": 1-5, "reasoning": "one sentence"},
+        "clarity":             {"score": 1-5, "reasoning": "one sentence"},
+        "urgency_tone":        {"score": 1-5, "reasoning": "one sentence"},
+        "entity_preservation": {"score": 1-5, "reasoning": "one sentence"}
+      }
