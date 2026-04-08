@@ -1,34 +1,25 @@
 """
-judge.py — LLM as a Judge (Decoupled, Profile-Driven, Override-Aware)
-──────────────────────────────────────────────────────────────────────
-Grades SCRIBE (summary) and TRACE (classification) outputs against a
-dynamically loaded evaluation Profile.
+judge.py — LLM-as-a-Judge: Generic, Prompt-Registry-Driven Evaluation Engine
+─────────────────────────────────────────────────────────────────────────────
+Evaluates the quality of SCRIBE complaint summaries.
 
-Key design points:
-  • Judge takes a Profile — all thresholds, criteria, and models from YAML.
-  • Chains are built LAZILY per (prompt, model) pair and cached.
-    → Any model introduced by a case-level override is created on demand.
-  • _resolve_criteria(case) merges profile criteria with case["overrides"].
-    → The profile is NEVER mutated; overrides are applied per grade() call.
-  • Per-case override fields (all optional, any combination):
-        enabled          — True/False (turn metric on or off for this case)
-        judge_model      — switch to a different Ollama model for this criterion
-        weight           — change contribution to weighted average
-        pass_threshold   — tighten/loosen per-criterion pass gate
-        fail_threshold   — tighten/loosen per-criterion fail gate
+All prompt text lives in config/prompts.yaml — this file contains ZERO prompt
+strings. It only contains the mechanics of calling LLMs, parsing responses,
+computing weighted scores, and applying strict verdicts.
 
-  Example in cases.py:
-      "overrides": {
-          "entity_preservation": {"enabled": False},
-          "faithfulness":        {"judge_model": "gemma3:4b", "weight": 2.5},
-      }
+Flow:
+  Judge(profile, prompt_loader)
+    └── grade(case)
+           ├── _resolve_criteria(case)       # apply case-level overrides
+           ├── _group_by_prompt(criteria)    # single vs combined
+           ├── LLM calls via _get_chain()    # lazy-cached, on-demand model init
+           ├── weighted average
+           └── _verdict()                   # Option B — strict
 
-  Verdict logic (Option B — strict):
-      PASS         → weighted_avg >= profile.pass_threshold
-                     AND no criterion score < its effective fail_threshold
-      FAIL         → weighted_avg < profile.fail_threshold
-                     OR any criterion score < its effective fail_threshold
-      NEEDS_REVIEW → everything else
+Adding a new evaluation criterion requires:
+  1. A new prompt entry in config/prompts.yaml
+  2. A new criterion block in config/evaluation_profiles.yaml
+  3. Zero Python changes here.
 """
 
 from __future__ import annotations
@@ -38,158 +29,9 @@ import re
 from typing import Optional
 
 from langchain_ollama import ChatOllama
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-from profile_loader import Profile, Criterion
-
-
-# ── Valid TRACE categories ─────────────────────────────────────────────────────
-
-VALID_CATEGORIES = [
-    "Billing/Fees Dispute",
-    "Fraud/Unauthorised Transaction",
-    "Fraud/Identity Theft",
-    "Loan/Mortgage Complaint",
-    "Account Access Issue",
-    "Customer Service Complaint",
-    "Other",
-]
-
-
-# ── Prompts ───────────────────────────────────────────────────────────────────
-
-FAITHFULNESS_PROMPT = ChatPromptTemplate.from_template("""
-You are evaluating a complaint summary for faithfulness.
-
-Step 1 — List every factual claim in the summary.
-Step 2 — For each claim, check if it is present in the original complaint.
-Step 3 — Score using this rubric:
-  1 = Summary contains facts not present in the complaint (hallucination)
-  2 = Summary has significant paraphrasing that distorts meaning
-  3 = Summary is mostly faithful, minor wording differences only
-  4 = All claims traceable but one small detail is off
-  5 = Every claim in the summary can be traced directly to the complaint
-
-Original Complaint:
-{complaint}
-
-SCRIBE Summary:
-{summary}
-
-Reply with JSON only. Example: {{"reasoning": "your step-by-step analysis", "score": 4}}
-Use an actual integer for score.
-""")
-
-COVERAGE_PROMPT = ChatPromptTemplate.from_template("""
-You are evaluating a complaint summary for coverage.
-
-Step 1 — Identify in the complaint: (a) core problem, (b) impact on customer, (c) urgency signals, (d) what the customer is asking for.
-Step 2 — Check which of these appear in the summary.
-Step 3 — Score using this rubric:
-  1 = Core problem is missing from the summary
-  2 = Core problem present but customer ask or impact is missing
-  3 = Core problem and ask present but urgency or impact is missing
-  4 = All key parts present, one minor detail missing
-  5 = Summary fully captures problem, impact, urgency signals, and customer ask
-
-Original Complaint:
-{complaint}
-
-SCRIBE Summary:
-{summary}
-
-Reply with JSON only. Example: {{"reasoning": "your step-by-step analysis", "score": 3}}
-Use an actual integer for score.
-""")
-
-ACTION_PROMPT = ChatPromptTemplate.from_template("""
-You are evaluating whether a complaint summary is action-oriented.
-
-Step 1 — Identify what specific action the customer wants (refund, fix, callback, investigation, etc.).
-Step 2 — Check if a support agent reading only the summary would immediately know what to do next.
-Step 3 — Score using this rubric:
-  1 = Summary gives no indication of what action is needed
-  2 = Action is vaguely implied but not clear
-  3 = Action is mentioned but lacks specifics (amount, date, account)
-  4 = Action is clear with most relevant details
-  5 = Agent knows exactly what to do from the summary alone — action, amount, date, account all present
-
-Original Complaint:
-{complaint}
-
-SCRIBE Summary:
-{summary}
-
-Reply with JSON only. Example: {{"reasoning": "your step-by-step analysis", "score": 5}}
-Use an actual integer for score.
-""")
-
-COMBINED_PROMPT = ChatPromptTemplate.from_template("""
-You are evaluating a complaint summary on four dimensions. Score each 1–5.
-
-Rubrics:
-  Conciseness         — 1: too long or too vague  3: acceptable length  5: perfectly compressed
-  Clarity             — 1: confusing or ambiguous  3: mostly clear  5: agent understands in 5 seconds
-  Urgency Tone        — 1: angry complaint summarised as calm  3: partial  5: tone and severity match original
-  Entity Preservation — 1: amounts/dates/IDs missing  3: some preserved  5: all key entities retained
-
-Original Complaint:
-{complaint}
-
-SCRIBE Summary:
-{summary}
-
-Reply with JSON only:
-{{
-  "conciseness":          {{"score": 1-5, "reason": "one sentence"}},
-  "clarity":              {{"score": 1-5, "reason": "one sentence"}},
-  "urgency_tone":         {{"score": 1-5, "reason": "one sentence"}},
-  "entity_preservation":  {{"score": 1-5, "reason": "one sentence"}}
-}}
-""")
-
-URGENCY_PROMPT = ChatPromptTemplate.from_template("""
-You are evaluating whether a complaint summary preserves urgency tone correctly.
-
-Step 1 — Assess the tone and severity of the original complaint (frustrated? urgent? calm?).
-Step 2 — Check if the summary reflects the same emotional tone and severity.
-Step 3 — Score using this rubric:
-  1 = Urgent/angry complaint is summarised as calm or neutral
-  2 = Severity is partially reflected but significantly softened
-  3 = Tone is partially preserved but could be stronger
-  4 = Tone and severity mostly match with minor softening
-  5 = Summary tone exactly matches the urgency level of the original complaint
-
-Original Complaint:
-{complaint}
-
-SCRIBE Summary:
-{summary}
-
-Reply with JSON only. Example: {{"reasoning": "your analysis", "score": 4}}
-Use an actual integer for score.
-""")
-
-TRACE_PROMPT = ChatPromptTemplate.from_template("""
-You are grading a complaint classification produced by TRACE.
-
-Step 1 — Identify the primary nature of the complaint.
-Step 2 — Check if the assigned category matches.
-Step 3 — Assign a score:
-  Use 1.0 if the category is correct.
-  Use 0.5 if it is a reasonable alternative but not the best fit.
-  Use 0.0 if it is clearly wrong.
-
-Original Complaint:
-{complaint}
-
-TRACE assigned: {category}
-Valid categories: {valid_categories}
-
-Reply with JSON only. Example format: {{"reasoning": "one sentence", "score": 1.0}}
-Use an actual number for score, not a range.
-""")
+from profile_loader import Profile, Criterion, PromptLoader
 
 
 # ── Non-LLM deterministic metrics ─────────────────────────────────────────────
@@ -232,69 +74,63 @@ def compression_flag(ratio: float) -> str:
 
 class Judge:
     """
-    Profile-driven LLM Judge with per-case override support.
+    Generic, prompt-registry-driven LLM judge for SCRIBE summary evaluation.
 
-    Args:
-        profile: A Profile dataclass loaded by ProfileLoader.
-                 Provides the base configuration (criteria, models, thresholds).
+    All prompt text comes from PromptLoader (config/prompts.yaml).
+    This class has no knowledge of specific criteria — it processes whatever
+    criteria a Profile defines, using whatever prompt each criterion references.
 
-    Per-case override example (in cases.py):
+    Per-case override support:
+        Any case dict can include an "overrides" key to patch individual
+        criterion settings for that one case only. The profile is never mutated.
+
         "overrides": {
             "entity_preservation": {"enabled": False},
             "faithfulness":        {"judge_model": "gemma3:4b", "weight": 2.5},
-            "coverage":            {"pass_threshold": 0.85, "fail_threshold": 0.65},
+            "coverage":            {"prompt": "coverage_strict"},
         }
-
-    Overridable fields (per criterion, all optional):
-        enabled          — True/False to turn a metric on or off for this case
-        judge_model      — any Ollama model name; new instance created on demand
-        weight           — contribution to the weighted average
-        pass_threshold   — per-criterion pass cutoff override
-        fail_threshold   — per-criterion fail cutoff override (hard FAIL if breached)
     """
 
-    def __init__(self, profile: Profile):
-        self.profile = profile
-        self._parser = StrOutputParser()
+    def __init__(self, profile: Profile, prompt_loader: Optional[PromptLoader] = None):
+        self.profile       = profile
+        self.prompt_loader = prompt_loader or PromptLoader()
+        self._parser       = StrOutputParser()
 
-        # LLM instances keyed by model name — pre-warmed for profile models,
-        # and extended on demand when case-level overrides introduce new models.
+        # LLM cache: model_name → ChatOllama instance
+        # Pre-warm for all models declared in the profile;
+        # extended on demand if a case override introduces a new model.
         self._llms: dict[str, ChatOllama] = {
-            model_name: ChatOllama(model=model_name, temperature=0)
-            for model_name in profile.unique_models
+            model: ChatOllama(model=model, temperature=0)
+            for model in profile.unique_models
         }
 
-        # Chain cache: (id(prompt_template), model_name) → runnable chain.
-        # Avoids rebuilding the same prompt|llm|parser triple repeatedly.
+        # Chain cache: (prompt_template_id, model_name) → runnable chain
         self._chain_cache: dict[tuple, object] = {}
 
     # ── Chain factory (lazy, cached) ───────────────────────────────────────────
 
-    def _get_chain(self, prompt, model_name: str):
+    def _get_chain(self, prompt_template, model_name: str):
         """
-        Return a cached (prompt | llm | parser) chain for the given model.
-        Creates a new ChatOllama instance if the model hasn't been seen before
-        (e.g. introduced by a case-level override pointing to a new model).
+        Return a cached (prompt | llm | parser) chain.
+        Creates a new ChatOllama instance on demand for override-introduced models.
         """
         if model_name not in self._llms:
             self._llms[model_name] = ChatOllama(model=model_name, temperature=0)
-        key = (id(prompt), model_name)
+        key = (id(prompt_template), model_name)
         if key not in self._chain_cache:
-            self._chain_cache[key] = prompt | self._llms[model_name] | self._parser
+            self._chain_cache[key] = prompt_template | self._llms[model_name] | self._parser
         return self._chain_cache[key]
 
-    # ── Criteria resolver ─────────────────────────────────────────────────────
+    # ── Criteria resolver (applies case-level overrides) ──────────────────────
 
     def _resolve_criteria(self, case: dict) -> dict:
         """
-        Merge profile-level criteria with case["overrides"].
-
-        Returns a fresh dict of Criterion objects — the profile is NEVER mutated.
-        Any field not present in the override inherits the profile's value.
+        Merge profile criteria with case["overrides"].
+        The profile is never mutated — overrides apply per-call only.
         """
         overrides = case.get("overrides", {})
         if not overrides:
-            return self.profile.criteria   # fast path — nothing to merge
+            return self.profile.criteria  # fast path
 
         effective = {}
         for crit_name, crit in self.profile.criteria.items():
@@ -304,6 +140,7 @@ class Judge:
                     name           = crit.name,
                     enabled        = ov.get("enabled",        crit.enabled),
                     judge_model    = ov.get("judge_model",    crit.judge_model),
+                    prompt         = ov.get("prompt",         crit.prompt),
                     weight         = float(ov.get("weight",   crit.weight)),
                     pass_threshold = ov.get("pass_threshold", crit.pass_threshold),
                     fail_threshold = ov.get("fail_threshold", crit.fail_threshold),
@@ -311,6 +148,31 @@ class Judge:
             else:
                 effective[crit_name] = crit
         return effective
+
+    # ── Prompt grouping ───────────────────────────────────────────────────────
+
+    def _group_by_prompt(self, criteria: dict) -> tuple[list, dict]:
+        """
+        Split enabled criteria into:
+          singles  : list of (crit_name, criterion) — one LLM call each
+          combined : dict of prompt_key → list of crit_names — one shared LLM call
+
+        Combined prompts (type=combined in prompts.yaml) are called once per
+        unique prompt key, and their output is distributed across all criteria
+        that reference that prompt.
+        """
+        singles:  list = []
+        combined: dict = {}  # prompt_key → [crit_name, ...]
+
+        for crit_name, crit in criteria.items():
+            if not crit.enabled:
+                continue
+            if self.prompt_loader.is_combined(crit.prompt_key):
+                combined.setdefault(crit.prompt_key, []).append(crit_name)
+            else:
+                singles.append((crit_name, crit))
+
+        return singles, combined
 
     # ── Parsing helpers ────────────────────────────────────────────────────────
 
@@ -335,23 +197,19 @@ class Judge:
 
     def grade(self, case: dict, matched_rule: str = "default") -> dict:
         """
-        Grade a single complaint case using the configured profile +
-        any case-level overrides in case["overrides"].
+        Grade a single complaint case.
 
         Args:
-            case         : dict with complaint, scribe_summary, trace_category,
-                           and optionally "overrides" for per-case patches.
-            matched_rule : which routing rule selected this profile (for traceability).
+            case         : dict with complaint, scribe_summary, and optional "overrides"
+            matched_rule : policy name that selected this profile (for audit trail)
 
         Returns:
-            Full result dict: scores, reasons, weights, models_used, overridden_criteria,
-            verdict, non_llm metrics, raw LLM responses.
+            Full result dict: scores, reasons, weights, models_used, verdict, raw outputs.
         """
         complaint = case["complaint"]
         summary   = case["scribe_summary"]
-
-        # Effective criteria = profile base + case overrides (profile never mutated)
-        criteria = self._resolve_criteria(case)
+        criteria  = self._resolve_criteria(case)
+        overridden = [k for k in case.get("overrides", {}) if k in criteria]
 
         scores:      dict[str, float] = {}
         reasons:     dict[str, str]   = {}
@@ -359,103 +217,49 @@ class Judge:
         models_used: dict[str, str]   = {}
         raw:         dict[str, str]   = {}
 
-        # Track which criteria were patched by case-level overrides (for reporting)
-        overridden = [k for k in case.get("overrides", {}) if k in criteria]
+        inputs = {"complaint": complaint, "summary": summary}
 
-        # ── Faithfulness ──────────────────────────────────────────────────────
-        crit = criteria.get("faithfulness")
-        if crit and crit.enabled:
-            chain = self._get_chain(FAITHFULNESS_PROMPT, crit.judge_model)
-            raw_f = chain.invoke({"complaint": complaint, "summary": summary})
-            f     = self._parse(raw_f)
-            scores["faithfulness"]      = self._norm(f.get("score", 1))
-            reasons["faithfulness"]     = f.get("reasoning", "")
-            weights["faithfulness"]     = crit.weight
-            models_used["faithfulness"] = crit.judge_model
-            raw["faithfulness"]         = raw_f
+        # ── Split criteria into single-call and combined-call groups ──────────
+        singles, combined_groups = self._group_by_prompt(criteria)
 
-        # ── Coverage ──────────────────────────────────────────────────────────
-        crit = criteria.get("coverage")
-        if crit and crit.enabled:
-            chain = self._get_chain(COVERAGE_PROMPT, crit.judge_model)
-            raw_c = chain.invoke({"complaint": complaint, "summary": summary})
-            c     = self._parse(raw_c)
-            scores["coverage"]      = self._norm(c.get("score", 1))
-            reasons["coverage"]     = c.get("reasoning", "")
-            weights["coverage"]     = crit.weight
-            models_used["coverage"] = crit.judge_model
-            raw["coverage"]         = raw_c
+        # ── Process single-output criteria ────────────────────────────────────
+        for crit_name, crit in singles:
+            prompt = self.prompt_loader.get(crit.prompt_key)
+            chain  = self._get_chain(prompt.template, crit.judge_model)
+            raw_out = chain.invoke(inputs)
+            parsed  = self._parse(raw_out)
 
-        # ── Action-Orientedness ───────────────────────────────────────────────
-        crit = criteria.get("action_orientedness")
-        if crit and crit.enabled:
-            chain = self._get_chain(ACTION_PROMPT, crit.judge_model)
-            raw_a = chain.invoke({"complaint": complaint, "summary": summary})
-            a     = self._parse(raw_a)
-            scores["action_orientedness"]      = self._norm(a.get("score", 1))
-            reasons["action_orientedness"]     = a.get("reasoning", "")
-            weights["action_orientedness"]     = crit.weight
-            models_used["action_orientedness"] = crit.judge_model
-            raw["action_orientedness"]         = raw_a
+            scores[crit_name]      = self._norm(parsed.get("score", 1))
+            reasons[crit_name]     = parsed.get("reasoning", "")
+            weights[crit_name]     = crit.weight
+            models_used[crit_name] = crit.judge_model
+            raw[crit_name]         = raw_out
 
-        # ── Combined block: conciseness, clarity, entity_preservation ─────────
-        # Single LLM call handles all three. Model = first enabled criterion's model.
-        combined_group = ["conciseness", "clarity", "entity_preservation"]
-        enabled_combined = [
-            n for n in combined_group
-            if criteria.get(n) and criteria[n].enabled
-        ]
-        raw_cmb = {}
-        if enabled_combined:
-            combined_model = criteria[enabled_combined[0]].judge_model
-            chain        = self._get_chain(COMBINED_PROMPT, combined_model)
-            raw_combined = chain.invoke({"complaint": complaint, "summary": summary})
-            raw_cmb      = self._parse(raw_combined)
-            raw["combined"] = raw_combined
+        # ── Process combined-output criteria ──────────────────────────────────
+        # One LLM call per unique combined prompt; then distribute sub-scores.
+        for prompt_key, crit_names in combined_groups.items():
+            prompt     = self.prompt_loader.get(prompt_key)
+            # Use the model from the first criterion in this group
+            first_crit = criteria[crit_names[0]]
+            chain      = self._get_chain(prompt.template, first_crit.judge_model)
+            raw_out    = chain.invoke(inputs)
+            parsed     = self._parse(raw_out)
+            raw[prompt_key] = raw_out
 
-        for key in combined_group:
-            crit = criteria.get(key)
-            if crit and crit.enabled:
-                scores[key]      = self._norm(raw_cmb.get(key, {}).get("score", 1))
-                reasons[key]     = raw_cmb.get(key, {}).get("reason", "")
-                weights[key]     = crit.weight
-                models_used[key] = crit.judge_model
+            for crit_name in crit_names:
+                crit = criteria[crit_name]
+                sub  = parsed.get(crit_name, {})
+                scores[crit_name]      = self._norm(sub.get("score", 1))
+                reasons[crit_name]     = sub.get("reason", "")
+                weights[crit_name]     = crit.weight
+                models_used[crit_name] = crit.judge_model
 
-        # ── Urgency Tone (standalone prompt) ──────────────────────────────────
-        crit = criteria.get("urgency_tone")
-        if crit and crit.enabled:
-            chain = self._get_chain(URGENCY_PROMPT, crit.judge_model)
-            raw_u = chain.invoke({"complaint": complaint, "summary": summary})
-            u     = self._parse(raw_u)
-            scores["urgency_tone"]      = self._norm(u.get("score", 1))
-            reasons["urgency_tone"]     = u.get("reasoning", "")
-            weights["urgency_tone"]     = crit.weight
-            models_used["urgency_tone"] = crit.judge_model
-            raw["urgency_tone"]         = raw_u
-
-        # ── TRACE classification ───────────────────────────────────────────────
-        crit = criteria.get("trace_classification")
-        if crit and crit.enabled:
-            chain = self._get_chain(TRACE_PROMPT, crit.judge_model)
-            raw_t = chain.invoke({
-                "complaint":        complaint,
-                "category":         case.get("trace_category", ""),
-                "valid_categories": ", ".join(VALID_CATEGORIES),
-            })
-            t = self._parse(raw_t)
-            # TRACE returns 0.0 / 0.5 / 1.0 directly — not 1–5 scale
-            scores["trace_classification"]      = round(float(t.get("score", 0)), 2)
-            reasons["trace_classification"]     = t.get("reasoning", "")
-            weights["trace_classification"]     = crit.weight
-            models_used["trace_classification"] = crit.judge_model
-            raw["trace_classification"]         = raw_t
-
-        # ── Non-LLM deterministic metrics ──────────────────────────────────────
+        # ── Non-LLM deterministic metrics ────────────────────────────────────
         ratio  = compression_ratio(complaint, summary)
         recall = entity_recall(complaint, summary)
         flag   = compression_flag(ratio)
 
-        # ── Weighted average score ─────────────────────────────────────────────
+        # ── Weighted average ──────────────────────────────────────────────────
         if scores:
             total_weight = sum(weights[k] for k in scores)
             weighted_avg = round(
@@ -464,7 +268,7 @@ class Judge:
         else:
             weighted_avg = 0.0
 
-        # ── Verdict (Option B — strict) ────────────────────────────────────────
+        # ── Verdict (Option B — strict) ───────────────────────────────────────
         verdict = self._verdict(scores, weighted_avg, criteria)
 
         return {
@@ -491,24 +295,24 @@ class Judge:
 
     def _verdict(
         self,
-        scores:      dict[str, float],
+        scores:       dict[str, float],
         weighted_avg: float,
-        criteria:    dict,
+        criteria:     dict,
     ) -> str:
         """
-        PASS:         weighted_avg >= profile.pass_threshold
-                      AND no criterion below its effective fail_threshold
-        FAIL:         weighted_avg < profile.fail_threshold
-                      OR any criterion below its effective fail_threshold
-        NEEDS_REVIEW: everything else
+        PASS         → weighted_avg >= pass_threshold
+                       AND no criterion below its effective fail_threshold
+        FAIL         → weighted_avg < fail_threshold
+                       OR any criterion below its effective fail_threshold
+        NEEDS_REVIEW → everything else
         """
         p = self.profile.pass_threshold
         f = self.profile.fail_threshold
 
         any_criterion_failed = any(
-            score < criteria[crit_name].effective_fail(f)
-            for crit_name, score in scores.items()
-            if crit_name in criteria
+            score < criteria[name].effective_fail(f)
+            for name, score in scores.items()
+            if name in criteria
         )
 
         if weighted_avg < f or any_criterion_failed:

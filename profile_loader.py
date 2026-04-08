@@ -18,16 +18,22 @@ Policy matching (first-match wins, top → bottom):
 from __future__ import annotations
 
 import os
+import re
 import yaml
 from dataclasses import dataclass, field
 from typing import Optional
 
+from langchain_core.prompts import ChatPromptTemplate
+
+
 
 # ── Config file paths ──────────────────────────────────────────────────────────
 
-_CONFIG_DIR = os.path.join(os.path.dirname(__file__), "config")
+_CONFIG_DIR    = os.path.join(os.path.dirname(__file__), "config")
 _PROFILES_FILE = os.path.join(_CONFIG_DIR, "evaluation_profiles.yaml")
-_POLICIES_FILE  = os.path.join(_CONFIG_DIR, "policies.yaml")
+_POLICIES_FILE = os.path.join(_CONFIG_DIR, "policies.yaml")
+_PROMPTS_FILE  = os.path.join(_CONFIG_DIR, "prompts.yaml")
+
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -37,15 +43,22 @@ class Criterion:
     name:           str
     enabled:        bool
     judge_model:    str
+    prompt:         str           = ""     # empty = use criterion name as key in prompts.yaml
     weight:         float         = 1.0
-    pass_threshold: Optional[float] = None  # None → inherit from profile
-    fail_threshold: Optional[float] = None  # None → inherit from profile
+    pass_threshold: Optional[float] = None
+    fail_threshold: Optional[float] = None
+
+    @property
+    def prompt_key(self) -> str:
+        """Prompt name to look up in prompts.yaml. Defaults to criterion name."""
+        return self.prompt or self.name
 
     def effective_pass(self, profile_pass: float) -> float:
         return self.pass_threshold if self.pass_threshold is not None else profile_pass
 
     def effective_fail(self, profile_fail: float) -> float:
         return self.fail_threshold if self.fail_threshold is not None else profile_fail
+
 
 
 @dataclass
@@ -67,6 +80,15 @@ class Profile:
 
 
 @dataclass
+class Prompt:
+    name:        str
+    type:        str              # "single" or "combined"
+    description: str
+    template:    ChatPromptTemplate
+    outputs:     list[str] = field(default_factory=list)  # only used for type=combined
+
+
+@dataclass
 class Policy:
     name:         str
     description:  str
@@ -75,33 +97,105 @@ class Policy:
     keywords:     list[str]       = field(default_factory=list)
 
 
+
+# ── PromptLoader ──────────────────────────────────────────────────────────────
+
+class PromptLoader:
+    """
+    Loads config/prompts.yaml and provides prompt templates by name.
+
+    Prompt types:
+        single   — one LLM call, returns {"reasoning": "...", "score": 1-5}
+        combined — one LLM call, returns multiple scores; outputs declares which criteria
+
+    Template variables ({complaint} and {summary}) are substituted at invocation time.
+    Literal { and } in the template text (e.g. JSON examples) are auto-escaped so that
+    ChatPromptTemplate does not treat them as variables.
+
+    Usage:
+        prompt_loader = PromptLoader()
+        prompt = prompt_loader.get("faithfulness")      # Prompt dataclass
+        prompt = prompt_loader.get("quality_combined")  # combined type
+    """
+
+    _KNOWN_VARS = re.compile(r'\{(complaint|summary)\}')
+
+    def __init__(self, prompts_path: str = _PROMPTS_FILE):
+        with open(prompts_path, encoding="utf-8") as f:
+            raw = yaml.safe_load(f)
+
+        self._prompts: dict[str, Prompt] = {}
+        for name, data in raw.get("prompts", {}).items():
+            template_str = data.get("template", "")
+            self._prompts[name] = Prompt(
+                name        = name,
+                type        = data.get("type", "single"),
+                description = data.get("description", ""),
+                template    = ChatPromptTemplate.from_template(
+                    self._escape(template_str)
+                ),
+                outputs     = data.get("outputs", []),
+            )
+
+    def _escape(self, text: str) -> str:
+        """
+        Escape all literal { and } in the template so ChatPromptTemplate treats
+        them as plain text, then restore only the known variable placeholders.
+        Result: {complaint} and {summary} remain as substitution targets;
+        everything else (e.g. JSON examples) is escaped to {{ and }}.
+        """
+        # Step 1: escape all braces
+        escaped = text.replace("{", "{{").replace("}", "}}")
+        # Step 2: restore known template variables
+        escaped = escaped.replace("{{complaint}}", "{complaint}")
+        escaped = escaped.replace("{{summary}}",   "{summary}")
+        return escaped
+
+    def get(self, name: str) -> Prompt:
+        """Return the Prompt for the given name. Raises KeyError if not found."""
+        if name not in self._prompts:
+            raise KeyError(
+                f"Prompt '{name}' not found in prompts.yaml. "
+                f"Available: {list(self._prompts.keys())}"
+            )
+        return self._prompts[name]
+
+    def is_combined(self, name: str) -> bool:
+        """True if this prompt returns multiple scores in one call."""
+        return self._prompts.get(name, Prompt("", "single", "", None)).type == "combined"
+
+    @property
+    def names(self) -> list[str]:
+        return list(self._prompts.keys())
+
+
 # ── ProfileLoader ─────────────────────────────────────────────────────────────
 
 class ProfileLoader:
     """
-    Loads evaluation_profiles.yaml and policies.yaml.
+    Loads all three config files and provides resolved profiles per complaint.
 
     Usage:
         loader = ProfileLoader()
         profile, policy_name = loader.resolve_profile(case)
-        judge = Judge(profile)
-        result = judge.grade(case, matched_rule=policy_name)
+        judge = Judge(profile, loader.prompt_loader)
     """
 
     def __init__(
         self,
         profiles_path: str = _PROFILES_FILE,
         policies_path:  str = _POLICIES_FILE,
+        prompts_path:   str = _PROMPTS_FILE,
     ):
         with open(profiles_path, encoding="utf-8") as f:
             raw_profiles = yaml.safe_load(f)
-
         with open(policies_path, encoding="utf-8") as f:
             raw_policies = yaml.safe_load(f)
 
-        self.profiles:        dict[str, Profile] = self._parse_profiles(raw_profiles)
-        self.policies:        list[Policy]        = self._parse_policies(raw_policies)
-        self.default_profile: str                 = raw_policies.get("default_profile", "standard")
+        self.prompt_loader:   PromptLoader       = PromptLoader(prompts_path)
+        self.profiles:        dict[str, Profile]  = self._parse_profiles(raw_profiles)
+        self.policies:        list[Policy]         = self._parse_policies(raw_policies)
+        self.default_profile: str                  = raw_policies.get("default_profile", "standard")
 
     # ── Parsing ───────────────────────────────────────────────────────────────
 
@@ -114,6 +208,7 @@ class ProfileLoader:
                     name           = crit_name,
                     enabled        = bool(crit_data.get("enabled", True)),
                     judge_model    = crit_data.get("judge_model", "mistral"),
+                    prompt         = crit_data.get("prompt", ""),  # empty → defaults to crit name
                     weight         = float(crit_data.get("weight", 1.0)),
                     pass_threshold = crit_data.get("pass_threshold"),
                     fail_threshold = crit_data.get("fail_threshold"),

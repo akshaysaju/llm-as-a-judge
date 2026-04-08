@@ -73,7 +73,8 @@ for case in CASES:
 judges: dict[str, Judge] = {}
 for _, profile, _ in case_profiles:
     if profile.name not in judges:
-        judges[profile.name] = Judge(profile)
+        judges[profile.name] = Judge(profile, loader.prompt_loader)
+
 
 results = []
 

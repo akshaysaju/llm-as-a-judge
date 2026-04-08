@@ -1,0 +1,198 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║                 prompts.yaml — Prompt Template Registry                       ║
+# ║                                                                              ║
+# ║  Every LLM prompt used by the judge lives here. Python code never contains   ║
+# ║  prompt text — it only references prompt names.                              ║
+# ║                                                                              ║
+# ║  Prompt types:                                                               ║
+# ║    single   — one LLM call, returns {"reasoning": "...", "score": 1-5}       ║
+# ║    combined — one LLM call, returns multiple scores in one JSON response     ║
+# ║               Must declare: outputs: [criterion1, criterion2, ...]            ║
+# ║                                                                              ║
+# ║  Template variables:                                                         ║
+# ║    {complaint}  — the original raw complaint text                            ║
+# ║    {summary}    — the SCRIBE-generated summary                               ║
+# ║                                                                              ║
+# ║  Note: Use { and } freely for JSON examples in the template text.            ║
+# ║  The loader auto-escapes them so they are not treated as variables.          ║
+# ║                                                                              ║
+# ║  How criteria link to prompts:                                               ║
+# ║    - If a criterion in evaluation_profiles.yaml has no "prompt:" key,        ║
+# ║      it defaults to using the criterion name as the prompt key.              ║
+# ║    - Example: criterion "faithfulness" → uses prompt "faithfulness" here.    ║
+# ║    - To use a different prompt: add prompt: faithfulness_strict in profile.  ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+prompts:
+
+  # ── Faithfulness (standard) ──────────────────────────────────────────────────
+  # Used by: standard, loan_focused profiles
+  # Checks: did SCRIBE add any claim not traceable to the original complaint?
+  faithfulness:
+    description: "Standard faithfulness check — flags hallucinations and unsupported claims"
+    type: single
+    template: |
+      You are evaluating a complaint summary for faithfulness.
+
+      Step 1 — List every factual claim in the summary.
+      Step 2 — For each claim, check if it is present in the original complaint.
+      Step 3 — Score using this rubric:
+        1 = Summary contains facts not present in the complaint (hallucination)
+        2 = Summary has significant paraphrasing that distorts meaning
+        3 = Summary is mostly faithful, minor wording differences only
+        4 = All claims traceable but one small detail is off
+        5 = Every claim in the summary can be traced directly to the complaint
+
+      Original Complaint:
+      {complaint}
+
+      SCRIBE Summary:
+      {summary}
+
+      Reply with JSON only. Example: {"reasoning": "your step-by-step analysis", "score": 4}
+      Use an actual integer for score.
+
+  # ── Faithfulness Strict (fraud / high-risk) ──────────────────────────────────
+  # Used by: fraud_focused, stringent profiles
+  # Stricter than standard: inferences are treated the same as hallucinations.
+  # A fraud case summary must only state what the customer explicitly wrote.
+  faithfulness_strict:
+    description: "Strict faithfulness — inferred or implied claims are penalised same as hallucinations"
+    type: single
+    template: |
+      You are a strict compliance reviewer evaluating a fraud complaint summary.
+
+      IMPORTANT RULE: A summary claim is only faithful if the customer EXPLICITLY stated it
+      in their complaint. Reasonable inferences or implied actions do NOT count as faithful,
+      even if they seem obvious. For example, if the customer described a problem but did not
+      say "requesting investigation", the summary may NOT include "requesting investigation".
+
+      Step 1 — List every claim in the summary.
+      Step 2 — For each claim, find the exact sentence in the complaint that supports it.
+               If no exact support exists, the claim is unfaithful.
+      Step 3 — Score using this rubric:
+        1 = One or more claims are invented or inferred (not in complaint)
+        2 = Claims are distorted or significantly paraphrased
+        3 = Mostly faithful but one claim is inferential
+        4 = All claims traceable, very minor wording variation only
+        5 = Every single claim maps exactly to words in the complaint
+
+      Original Complaint:
+      {complaint}
+
+      SCRIBE Summary:
+      {summary}
+
+      Reply with JSON only. Example: {"reasoning": "your step-by-step analysis", "score": 4}
+      Use an actual integer for score.
+
+  # ── Coverage ──────────────────────────────────────────────────────────────────
+  # Used by: all profiles (default — same prompt, different weights/thresholds)
+  coverage:
+    description: "Coverage check — did the summary capture the full complaint?"
+    type: single
+    template: |
+      You are evaluating a complaint summary for coverage.
+
+      Step 1 — Identify in the complaint: (a) core problem, (b) impact on customer,
+               (c) urgency signals, (d) what the customer is asking for.
+      Step 2 — Check which of these appear in the summary.
+      Step 3 — Score using this rubric:
+        1 = Core problem is missing from the summary
+        2 = Core problem present but customer ask or impact is missing
+        3 = Core problem and ask present but urgency or impact is missing
+        4 = All key parts present, one minor detail missing
+        5 = Summary fully captures problem, impact, urgency signals, and customer ask
+
+      Original Complaint:
+      {complaint}
+
+      SCRIBE Summary:
+      {summary}
+
+      Reply with JSON only. Example: {"reasoning": "your step-by-step analysis", "score": 3}
+      Use an actual integer for score.
+
+  # ── Action Orientedness ───────────────────────────────────────────────────────
+  # Used by: all profiles
+  action_orientedness:
+    description: "Action clarity check — does the summary tell an agent exactly what to do?"
+    type: single
+    template: |
+      You are evaluating whether a complaint summary is action-oriented.
+
+      Step 1 — Identify what specific action the customer wants (refund, fix, callback,
+               investigation, etc.).
+      Step 2 — Check if a support agent reading ONLY the summary would immediately know
+               what to do next.
+      Step 3 — Score using this rubric:
+        1 = Summary gives no indication of what action is needed
+        2 = Action is vaguely implied but not clear
+        3 = Action is mentioned but lacks specifics (amount, date, account)
+        4 = Action is clear with most relevant details
+        5 = Agent knows exactly what to do — action, amount, date, account all present
+
+      Original Complaint:
+      {complaint}
+
+      SCRIBE Summary:
+      {summary}
+
+      Reply with JSON only. Example: {"reasoning": "your step-by-step analysis", "score": 5}
+      Use an actual integer for score.
+
+  # ── Urgency Tone ──────────────────────────────────────────────────────────────
+  # Used by: stringent, fraud_focused, loan_focused (standard has it disabled)
+  urgency_tone:
+    description: "Urgency tone check — does the summary match the emotional severity of the complaint?"
+    type: single
+    template: |
+      You are evaluating whether a complaint summary preserves urgency tone correctly.
+
+      Step 1 — Assess the tone and severity of the original complaint (frustrated? urgent? calm?).
+      Step 2 — Check if the summary reflects the same emotional tone and severity.
+      Step 3 — Score using this rubric:
+        1 = Urgent or angry complaint is summarised as calm or neutral
+        2 = Severity is partially reflected but significantly softened
+        3 = Tone is partially preserved but could be stronger
+        4 = Tone and severity mostly match with minor softening
+        5 = Summary tone exactly matches the urgency level of the original complaint
+
+      Original Complaint:
+      {complaint}
+
+      SCRIBE Summary:
+      {summary}
+
+      Reply with JSON only. Example: {"reasoning": "your analysis", "score": 4}
+      Use an actual integer for score.
+
+  # ── Quality Combined ──────────────────────────────────────────────────────────
+  # Used by: all profiles for conciseness, clarity, entity_preservation criteria
+  # ONE LLM call returns scores for all three criteria simultaneously.
+  # This is the "combined" type — declare outputs to tell the judge which
+  # criteria to read from the JSON response.
+  quality_combined:
+    description: "Single combined call for conciseness, clarity, entity_preservation"
+    type: combined
+    outputs: [conciseness, clarity, entity_preservation]
+    template: |
+      You are evaluating a complaint summary on three dimensions. Score each 1–5.
+
+      Rubrics:
+        Conciseness         — 1: too long or too vague  3: acceptable length  5: perfectly compressed
+        Clarity             — 1: confusing or ambiguous  3: mostly clear  5: agent understands in 5 seconds
+        Entity Preservation — 1: amounts/dates/IDs missing  3: some preserved  5: all key entities retained
+
+      Original Complaint:
+      {complaint}
+
+      SCRIBE Summary:
+      {summary}
+
+      Reply with JSON only:
+      {
+        "conciseness":         {"score": 1-5, "reason": "one sentence"},
+        "clarity":             {"score": 1-5, "reason": "one sentence"},
+        "entity_preservation": {"score": 1-5, "reason": "one sentence"}
+      }

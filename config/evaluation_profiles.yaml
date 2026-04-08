@@ -40,13 +40,15 @@ profiles:
       faithfulness:
         enabled: true
         judge_model: mistral
-        weight: 1.5            # slightly elevated — hallucinations always matter
+        prompt: faithfulness          # standard faithfulness check
+        weight: 1.5
         pass_threshold: 0.75
         fail_threshold: 0.50
 
       coverage:
         enabled: true
         judge_model: mistral
+        prompt: coverage
         weight: 1.0
         pass_threshold: 0.75
         fail_threshold: 0.50
@@ -54,27 +56,31 @@ profiles:
       action_orientedness:
         enabled: true
         judge_model: mistral
+        prompt: action_orientedness
         weight: 1.0
         pass_threshold: 0.75
         fail_threshold: 0.50
 
       conciseness:
         enabled: true
-        judge_model: llama3.2  # lightweight metric — small model is fine
+        judge_model: llama3.2
+        prompt: quality_combined      # combined call with clarity + entity_preservation
         weight: 0.75
-        pass_threshold: 0.60   # more lenient — not a critical quality gate
+        pass_threshold: 0.60
         fail_threshold: 0.40
 
       clarity:
         enabled: true
         judge_model: llama3.2
+        prompt: quality_combined      # same combined call
         weight: 0.75
         pass_threshold: 0.60
         fail_threshold: 0.40
 
       urgency_tone:
-        enabled: false         # not critical for standard complaints
+        enabled: false
         judge_model: mistral
+        prompt: urgency_tone
         weight: 0.75
         pass_threshold: 0.60
         fail_threshold: 0.40
@@ -82,6 +88,7 @@ profiles:
       entity_preservation:
         enabled: true
         judge_model: mistral
+        prompt: quality_combined      # same combined call
         weight: 1.0
         pass_threshold: 0.75
         fail_threshold: 0.50
@@ -99,7 +106,8 @@ profiles:
 
       faithfulness:
         enabled: true
-        judge_model: gemma3:4b  # stricter reasoning model
+        judge_model: gemma3:4b
+        prompt: faithfulness_strict   # strict — inferences penalised same as hallucinations
         weight: 2.0
         pass_threshold: 0.85
         fail_threshold: 0.65
@@ -107,6 +115,7 @@ profiles:
       coverage:
         enabled: true
         judge_model: gemma3:4b
+        prompt: coverage
         weight: 2.0
         pass_threshold: 0.80
         fail_threshold: 0.60
@@ -114,6 +123,7 @@ profiles:
       action_orientedness:
         enabled: true
         judge_model: mistral
+        prompt: action_orientedness
         weight: 1.5
         pass_threshold: 0.80
         fail_threshold: 0.60
@@ -121,6 +131,7 @@ profiles:
       conciseness:
         enabled: true
         judge_model: llama3.2
+        prompt: quality_combined
         weight: 1.0
         pass_threshold: 0.70
         fail_threshold: 0.50
@@ -128,20 +139,23 @@ profiles:
       clarity:
         enabled: true
         judge_model: llama3.2
+        prompt: quality_combined
         weight: 1.0
         pass_threshold: 0.70
         fail_threshold: 0.50
 
       urgency_tone:
-        enabled: true          # must preserve urgency in high-risk cases
+        enabled: true
         judge_model: mistral
+        prompt: urgency_tone
         weight: 1.5
         pass_threshold: 0.75
         fail_threshold: 0.55
 
       entity_preservation:
         enabled: true
-        judge_model: gemma3:4b  # entity accuracy critical for compliance
+        judge_model: gemma3:4b
+        prompt: quality_combined
         weight: 2.0
         pass_threshold: 0.85
         fail_threshold: 0.65
@@ -160,7 +174,8 @@ profiles:
 
       faithfulness:
         enabled: true
-        judge_model: gemma3:4b  # fraud needs careful fact checking
+        judge_model: gemma3:4b
+        prompt: faithfulness_strict   # strict — no inferences allowed on fraud cases
         weight: 3.0             # triple-weighted — a hallucinated amount is dangerous
         pass_threshold: 0.80
         fail_threshold: 0.60
@@ -168,6 +183,7 @@ profiles:
       coverage:
         enabled: true
         judge_model: gemma3:4b
+        prompt: coverage
         weight: 2.0
         pass_threshold: 0.78
         fail_threshold: 0.58
@@ -175,13 +191,15 @@ profiles:
       action_orientedness:
         enabled: true
         judge_model: mistral
+        prompt: action_orientedness
         weight: 1.5
         pass_threshold: 0.75
         fail_threshold: 0.55
 
       conciseness:
-        enabled: false         # fraud tickets tolerate longer summaries
+        enabled: false
         judge_model: llama3.2
+        prompt: quality_combined
         weight: 0.5
         pass_threshold: 0.55
         fail_threshold: 0.35
@@ -189,20 +207,23 @@ profiles:
       clarity:
         enabled: true
         judge_model: llama3.2
+        prompt: quality_combined
         weight: 0.75
         pass_threshold: 0.65
         fail_threshold: 0.45
 
       urgency_tone:
-        enabled: true          # fraud is always urgent — must be reflected in summary
+        enabled: true
         judge_model: mistral
+        prompt: urgency_tone
         weight: 2.0
         pass_threshold: 0.75
         fail_threshold: 0.55
 
       entity_preservation:
         enabled: true
-        judge_model: gemma3:4b  # amounts, dates, card numbers MUST survive in summary
+        judge_model: gemma3:4b
+        prompt: quality_combined
         weight: 3.0
         pass_threshold: 0.85
         fail_threshold: 0.65
@@ -221,6 +242,7 @@ profiles:
       faithfulness:
         enabled: true
         judge_model: mistral
+        prompt: faithfulness
         weight: 1.5
         pass_threshold: 0.75
         fail_threshold: 0.50
@@ -228,6 +250,7 @@ profiles:
       coverage:
         enabled: true
         judge_model: mistral
+        prompt: coverage
         weight: 2.0            # loan complaints have complex timelines — coverage critical
         pass_threshold: 0.78
         fail_threshold: 0.55
@@ -235,6 +258,7 @@ profiles:
       action_orientedness:
         enabled: true
         judge_model: mistral
+        prompt: action_orientedness
         weight: 2.0            # what does the customer want? must be crystal clear
         pass_threshold: 0.78
         fail_threshold: 0.55
@@ -242,6 +266,7 @@ profiles:
       conciseness:
         enabled: true
         judge_model: llama3.2
+        prompt: quality_combined
         weight: 0.75
         pass_threshold: 0.60
         fail_threshold: 0.40
@@ -249,20 +274,23 @@ profiles:
       clarity:
         enabled: true
         judge_model: llama3.2
+        prompt: quality_combined
         weight: 1.0
         pass_threshold: 0.65
         fail_threshold: 0.45
 
       urgency_tone:
-        enabled: true          # "losing money every week" — urgency must be preserved
+        enabled: true
         judge_model: mistral
+        prompt: urgency_tone
         weight: 1.5
         pass_threshold: 0.75
         fail_threshold: 0.55
 
       entity_preservation:
         enabled: true
-        judge_model: mistral   # dates and timelines crucial for loan resolution
+        judge_model: mistral
+        prompt: quality_combined
         weight: 1.5
         pass_threshold: 0.78
         fail_threshold: 0.55
