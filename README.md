@@ -35,7 +35,7 @@ judge.py            ← calls local Ollama LLMs, scores each criterion, applies 
 PASS / NEEDS_REVIEW / FAIL  +  detailed audit report
 ```
 
-Everything that drives the system's decisions lives in the three data files. The Python scripts are just the execution engine.
+Everything that drives the system's decisions lives in the four data files. The Python scripts are just the execution engine.
 
 ---
 
@@ -52,12 +52,13 @@ complaint_judge/
 ├── README.md
 └── config/
     ├── policies.yaml                # Business routing: conditions → eval profile
-    └── evaluation_profiles.yaml    # Eval profiles: criteria, models, weights, thresholds
+    ├── evaluation_profiles.yaml     # Eval profiles: criteria, models, weights, thresholds
+    └── prompts.yaml                 # Centralized prompt templates & configuration
 ```
 
 ---
 
-## The Three Config Files
+## The Four Config Files
 
 ### `cases.json` — Input Data
 
@@ -127,21 +128,30 @@ policies:
 
 ### `config/evaluation_profiles.yaml` — The Rulebook
 
-Defines exactly how to evaluate a SCRIBE summary — which metrics to run, which model judges each one, and how strict to be.
+Defines exactly how to evaluate a SCRIBE summary — which metrics to run, which model judges each one, how strict to be, and how to query the LLMs.
 
 ```yaml
 fraud_focused:
-  pass_threshold: 0.78   # weighted avg must be >= this to PASS
-  fail_threshold: 0.55   # weighted avg < this = FAIL (also per-criterion)
+  pass_threshold: 0.78       # weighted avg must be >= this to PASS
+  fail_threshold: 0.55       # weighted avg < this = FAIL
+  prompt_mode: all_in_one    # per_criterion, mixed, or all_in_one
+  combined_prompt: fraud_all_criteria # if all_in_one, use this prompt
 
   criteria:
     faithfulness:
       enabled: true
-      judge_model: gemma3:4b   # stricter model for fraud fact-checking
-      weight: 3.0              # triple-weighted — hallucinated amounts are dangerous
-      pass_threshold: 0.80     # this criterion needs >= 0.80
-      fail_threshold: 0.60     # if < 0.60 → hard FAIL regardless of avg
+      judge_model: gemma3:4b # stricter model for fraud fact-checking
+      weight: 3.0            # triple-weighted — hallucinated amounts are dangerous
+      prompt: faithfulness_strict # overrides default prompt name
+      pass_threshold: 0.80   # this criterion needs >= 0.80
+      fail_threshold: 0.60   # if < 0.60 → hard FAIL regardless of avg
 ```
+
+#### Prompt Modes
+Profiles support three `prompt_mode`s:
+- **`per_criterion`**: N LLM calls. Each metric runs independently with its own prompt. Most granular.
+- **`all_in_one`**: 1 LLM call. One model sees all metrics at once and scores them together. Most efficient.
+- **`mixed`**: Some grouped (e.g., quality metrics together), some solo. Balanced.
 
 #### The Four Profiles
 
@@ -170,40 +180,61 @@ fraud_focused:
 
 ### How scores are calculated
 
-Each enabled criterion gets a **raw score of 1–5** from the LLM judge, normalized to **0.0–1.0**. A **weighted average** is then computed across all enabled criteria:
+Each enabled criterion gets a **raw score of 1–5** from the LLM judge.
+1. The score is normalized to **0.0–1.0**.
+2. A **weighted average** is then computed across all enabled criteria:
 
 ```
 weighted_avg = Σ(score × weight) / Σ(weights)
 ```
 
-### Verdict: Option B — Strict
+*(Note: The scoring math is identical whether the LLM is queried per_criterion, combined, or all_in_one. The prompt mode only changes HOW the 1-5 integer is fetched.)*
+
+### Verdict: Option B — Strict (Traffic Light System)
+
+We use a strict dual-check system. A summary must pass the overall average check AND survive every individual metric's fail threshold limit.
 
 ```
-PASS         → weighted_avg >= profile.pass_threshold
-               AND no individual criterion below its fail_threshold
-
-NEEDS_REVIEW → weighted_avg is between pass and fail
-               AND no criterion gate breached
-
-FAIL         → weighted_avg < profile.fail_threshold
-               OR any single criterion below its fail_threshold
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 0.0          0.50          0.75          1.0
+  |────FAIL────|─NEEDS_REVIEW─|─────PASS─────|
+  |            |              |              |
+  ❌           ⏸             ✅
+  escalate     human          auto-approve
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-The strict rule means: **even a good overall average is overridden if one critical dimension fails its gate.** For example, a fraud case with excellent coverage but a hallucinated amount will FAIL on faithfulness, resulting in an overall FAIL — even if every other metric scored perfectly.
+- **`PASS`**: weighted_avg $\ge$ profile.pass_threshold 
+  *(AND no individual criterion is below its own fail threshold)*
+- **`NEEDS_REVIEW`**: weighted_avg is between pass and fail
+  *(AND no individual criterion is below its own fail threshold)*
+- **`FAIL`**: weighted_avg $<$ profile.fail_threshold 
+  *(OR any single criterion is below its own fail threshold)*
 
-### Example — COMP-002 (fraud case)
+### The Strict Gate override
+The strict rule means: **even a good overall average is overridden if one critical dimension falls below its fail threshold.** It skips `NEEDS_REVIEW` and jumps straight to `FAIL`.
+
+#### Example — COMP-001 (standard case)
 
 | Criterion | Model | Score | Weight | Gate |
 |-----------|-------|:-----:|:------:|------|
-| faithfulness | gemma3:4b | **0.20** | ×3.0 | **< 0.60 → gate FAIL** |
-| coverage | gemma3:4b | 1.00 | ×2.0 | ✅ |
-| action_orientedness | mistral | 1.00 | ×1.5 | ✅ |
-| urgency_tone | mistral | 0.20 | ×2.0 | ✅ |
-| entity_preservation | gemma3:4b | 0.80 | ×3.0 | ✅ |
+| faithfulness | mistral | 1.00 | ×1.5 | ✅ |
+| coverage    | mistral | **0.40** | ×1.0 | **< 0.50 → gate FAIL** |
+| action_orientedness | mistral | 1.00 | ×1.0 | ✅ |
 
-Weighted avg = **0.61** (above fail threshold of 0.55) — but faithfulness gate breached → **FAIL**
+Weighted avg = **0.78** (above pass threshold of 0.75) — but coverage gate breached → **FORCED FAIL** ❌
 
-Why? SCRIBE wrote "Requesting investigation" in the summary. The customer never said that. `gemma3:4b` flagged it as a hallucinated claim → score 1/5.
+---
+
+## config/prompts.yaml — Centralized Registry
+
+All LLM prompt templates are stored externally in `config/prompts.yaml`. Python code completely lacks any hardcoded grading strings. Features include:
+- `single` and `combined` prompt structures.
+- Domain-specific wording per profile:
+    - *Fraud* templates emphasize "no inferences allowed, check explicit claims".
+    - *Stringent* templates use regulatory adherence wording.
+    - *Loan* templates frame the grading around process timelines and financial loss.
+- Variables like `{complaint}` and `{summary}` injected dynamically.
 
 ---
 
